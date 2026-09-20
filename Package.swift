@@ -33,6 +33,7 @@ let package = Package(
             name: "AXeCore",
             targets: ["AXeCore"]
         ),
+        .library(name: "AXeSimulator", targets: ["AXeSimulator"]),
         .executable(
             name: "axe",
             targets: ["AXe"]
@@ -45,6 +46,13 @@ let package = Package(
         .target(
             name: "AXeCore",
             path: "Sources/AXeCore"
+        ),
+        .target(
+            name: "AXeSimulator",
+            dependencies: ["AXeCore", "FBSimulatorControl", "FBDeviceControl", "FBControlCore", "XCTestBootstrap"],
+            path: "Sources/AXeSimulator",
+            swiftSettings: [.unsafeFlags(idbPrivateHeaderSearchFlags)],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path"])]
         ),
         .executableTarget(
             name: "AXe",

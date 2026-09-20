@@ -57,6 +57,27 @@ axe screenshot --output ./screen.png --udid "$UDID"
 
 ## Documentation
 
+### Jev-assisted driver (fork)
+
+`Driver/` builds the separate `axe-driver` executable. It requires macOS 26, Swift 6.4, Xcode 27 simulator support, the IDB XCFrameworks built for AXe, and `TYPESAFE_API_KEY`. The ordinary `axe` executable does not load TypeSafe or require its credentials.
+
+```bash
+# From the repository root, prepare the binary IDB dependencies once.
+./scripts/build.sh setup
+./scripts/build.sh frameworks
+./scripts/build.sh install
+./scripts/build.sh strip
+./scripts/build.sh xcframeworks
+
+cd Driver
+swift build --product axe-driver
+printf '%s\n' '{"simulatorUDID":"<UDID>","instruction":"Tap Continue"}' | swift run axe-driver
+```
+
+Select the intended Xcode with `DEVELOPER_DIR` if it is not the active Xcode. The input is one JSON object on standard input. Set `observeOnly: true` to return the current actionable rows without calling Jev. For text entry, include the exact `text` string supplied by the calling agent. `minimumProbability` defaults to `0.65`. The result contains `status`, before and after rows, candidates, the model selection and probabilities, execution details, latency, and token usage. `executed` means input was sent; `executed_unverified` means the follow-up observation failed; `uncertain_write` means input may have been sent. Inspect fresh UI evidence before retrying either uncertain result. The calling agent must confirm the larger task outcome. The driver does not launch apps or decide task goals.
+
+The root package remains at macOS 14 compatibility. `Driver/` is a separate macOS 26 package because the TypeSafe Swift SDK requires macOS 26. During local development, set `TYPESAFE_PACKAGE_DIR` to a checkout of `swift-typesafe`; otherwise SwiftPM resolves its `0.7.0` release.
+
 Full documentation is available at [axe-cli.com/docs](https://axe-cli.com/docs).
 
 ## Disclaimer

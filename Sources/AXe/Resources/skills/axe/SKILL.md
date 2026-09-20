@@ -85,3 +85,7 @@ Before finalising guidance, verify:
 - Only valid AXe commands and flags are used.
 - Shell quoting is correct (single quotes for literals, `--stdin`/`--file` for complex text).
 - Verification is suggested as a separate step when results matter.
+
+## Jev-assisted driver in this fork
+
+For one semantic simulator interaction, the separate `Driver/` package provides `axe-driver`. Send one JSON object on standard input with `simulatorUDID` and `instruction`; add exact `text` for a typing candidate or `observeOnly: true` for accessibility rows without a Jev call. The driver returns JSON with fresh rows, candidate actions, probabilities, the action sent, latency, and token usage. Treat `executed` as input delivery and verify the larger task from subsequent UI evidence. The calling agent owns app launch, task planning, exact values, and recovery. This package needs `TYPESAFE_API_KEY` and macOS 26; the ordinary `axe` commands above do not.
