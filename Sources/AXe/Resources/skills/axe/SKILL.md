@@ -85,3 +85,9 @@ Before finalising guidance, verify:
 - Only valid AXe commands and flags are used.
 - Shell quoting is correct (single quotes for literals, `--stdin`/`--file` for complex text).
 - Verification is suggested as a separate step when results matter.
+
+## Jev-assisted goals
+
+This repository also contains a separate macOS 26 `axe-driver`; it is not an ordinary `axe` subcommand. Use it only when the caller asks for Jev-assisted semantic UI manipulation and understands that compact accessibility labels and values are sent to TypeSafe.
+
+Build it with `make setup-axe-driver`, then send one JSON request on standard input. Include `simulatorUDID`, `instruction`, and `maxSteps`; supply exact `text` rather than asking Jev to generate it. Supply `requirements` and/or exact `expectLabels`, `expectIDs`, or `expectValues` whenever completion matters. Treat only `completed` as verified. On `done_unverified`, `uncertain`, `stale`, or `uncertain_write`, inspect the returned fresh rows before deciding whether to continue.

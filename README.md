@@ -57,6 +57,31 @@ axe screenshot --output ./screen.png --udid "$UDID"
 
 ## Documentation
 
+### Jev-assisted driver
+
+`Driver/` builds the separate macOS 26 `axe-driver` executable. It keeps TypeSafe and `TYPESAFE_API_KEY` out of the ordinary macOS 14-compatible `axe` executable.
+
+```bash
+# Build AXe's simulator dependencies and an optimized driver.
+make setup-axe-driver
+
+# Run a bounded goal. The caller supplies exact text and independent evidence.
+printf '%s\n' '{
+  "simulatorUDID": "<UDID>",
+  "instruction": "Create and save an event titled Cameron Birthday",
+  "text": "Cameron Birthday",
+  "maxSteps": 8,
+  "requirements": [
+    "An event titled Cameron Birthday is visibly present"
+  ],
+  "expectLabels": ["Cameron Birthday"]
+}' | Driver/.build/release/axe-driver
+```
+
+The driver sends compact accessibility labels and values to TypeSafe's API. Use fixture or test-account data. It asks Jev to select one offered operation and one compatible visible target per step; AXe owns coordinates, freshness checks, HID input, budgets, and final verification. `completed` is returned only after a fresh UI observation satisfies every configured requirement and deterministic expectation. `done_unverified`, `uncertain`, `stale`, and `uncertain_write` return control without retrying a mutation.
+
+Set `observeOnly: true` to inspect actionable rows without calling Jev. `minimumConfidence` defaults to `0.5`; `minimumProbability` is an optional additional gate. Pin `model` for repeatable benchmarks or omit it to use `jev-latest`.
+
 Full documentation is available at [axe-cli.com/docs](https://axe-cli.com/docs).
 
 ## Disclaimer
