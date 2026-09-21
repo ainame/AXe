@@ -46,6 +46,8 @@ func excludesUnavailableRows() throws {
     """#.utf8)
     let rows = try Observation.rows(from: data)
     #expect(rows.map(\.label) == ["Visible"])
+    let verificationRows = try Observation.rows(from: data, includeOffscreen: true)
+    #expect(verificationRows.map(\.label) == ["Visible", "Offscreen"])
 }
 
 @Test("Numeric accessibility values decode without losing the hierarchy")
@@ -111,4 +113,54 @@ func unsavedEditorBlocksCompletion() throws {
     let rows = try Observation.rows(from: data)
     #expect(!GoalRunner.completionIsAvailable(rows: rows))
     #expect(GoalAction.goalComplete.rawValue == "goal_complete")
+}
+
+@Test("A transient empty observation is not accepted as a UI transition")
+@MainActor
+func emptyTransitionIsRejected() throws {
+    let data = Data(#"""
+    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
+      {"role":"AXButton","AXLabel":"Calendar","frame":{"x":10,"y":20,"width":90,"height":40}}
+    ]}
+    """#.utf8)
+    let rows = try Observation.rows(from: data)
+    #expect(!GoalRunner.acceptsTransition(from: rows, to: []))
+}
+
+@Test("Target selection uses selected probability rather than distribution confidence")
+@MainActor
+func targetSelectionThreshold() {
+    #expect(GoalRunner.targetIsAccepted(selectedProbability: 0.54, minimumProbability: 0))
+    #expect(!GoalRunner.targetIsAccepted(selectedProbability: 0.49, minimumProbability: 0))
+    #expect(!GoalRunner.targetIsAccepted(selectedProbability: 0.79, minimumProbability: 0.8))
+}
+
+@Test("Calendar date goals constrain taps to navigation prerequisites")
+@MainActor
+func dateNavigationCandidates() throws {
+    let requested = GoalRunner.requestedDate(
+        in: "Open Calendar, go to August 20 2026, create an event"
+    )
+    #expect(requested == RequestedDate(month: "August", day: 20, year: 2026))
+
+    let september = try Observation.rows(from: Data(#"""
+    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
+      {"role":"AXButton","AXLabel":"2026","AXUniqueId":"BackButton","frame":{"x":10,"y":20,"width":90,"height":40}},
+      {"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","frame":{"x":300,"y":20,"width":90,"height":40}},
+      {"role":"AXButton","AXLabel":"Monday 31 August","frame":{"x":10,"y":70,"width":90,"height":40}}
+    ]}
+    """#.utf8))
+    let indexed = Dictionary(uniqueKeysWithValues: september.enumerated().map { ("e\($0.offset)", $0.element) })
+    let navigation = GoalRunner.constrainedTapRows(indexed, requestedDate: requested, dateSelected: false)
+    #expect(navigation.values.map(\.stableID) == ["BackButton"])
+
+    let august = try Observation.rows(from: Data(#"""
+    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
+      {"role":"AXButton","AXLabel":"Thursday 20 August","frame":{"x":10,"y":70,"width":120,"height":40}},
+      {"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","frame":{"x":300,"y":20,"width":90,"height":40}}
+    ]}
+    """#.utf8))
+    let augustIndexed = Dictionary(uniqueKeysWithValues: august.enumerated().map { ("e\($0.offset)", $0.element) })
+    let date = GoalRunner.constrainedTapRows(augustIndexed, requestedDate: requested, dateSelected: false)
+    #expect(date.values.map(\.label) == ["Thursday 20 August"])
 }

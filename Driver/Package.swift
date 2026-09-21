@@ -17,6 +17,7 @@ let package = Package(
     products: [.executable(name: "axe-driver", targets: ["AXeDriver"])],
     dependencies: [
         .package(path: ".."),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
         .package(url: "https://github.com/ainame/swift-typesafe", from: "0.7.0"),
     ],
     targets: [
@@ -24,6 +25,7 @@ let package = Package(
             name: "AXeDriver",
             dependencies: [
                 .product(name: "AXeSimulator", package: "AXe"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "TypeSafe", package: "swift-typesafe"),
             ],
             swiftSettings: [.unsafeFlags(headerFlags)]

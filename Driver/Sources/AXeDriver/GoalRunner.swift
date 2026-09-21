@@ -30,6 +30,12 @@ enum GoalAction: String {
     }
 }
 
+struct RequestedDate: Equatable {
+    let month: String
+    let day: Int
+    let year: Int
+}
+
 struct GoalStep: Encodable {
     let action: String
     let target: String?
@@ -106,6 +112,11 @@ enum GoalRunner {
         var outputTokens = 0
         var completionRejections = 0
         var targetNoMatches = 0
+        let requestedDate = requestedDate(in: request.instruction)
+        var requestedDateSelected = false
+        var eventCreationStarted = false
+        var exactTextEntered = false
+        var navigationNoChangeRetries = 0
         func finish(_ status: String, _ message: String, verification: GoalVerification? = nil) -> GoalResult {
             DriverLog.write("finished status=\(status) elapsed_ms=\(elapsed()) message=\(message)")
             return GoalResult(
@@ -155,7 +166,7 @@ enum GoalRunner {
         )
 
         for stepNumber in 1...maxSteps {
-            do { rows = try Observation.rows(from: await session.observe()) }
+            do { rows = try await observeActionable(session: session) }
             catch {
                 if request.appBundleID == nil || openedApp { throw error }
                 rows = []
@@ -196,7 +207,16 @@ enum GoalRunner {
                     criteria: actionCriteria
                 )
             ]
-            addTargetQuestion("tap_target", operation: "tap", rows: indexed, questions: &questions)
+            var tapRows = constrainedTapRows(
+                indexed,
+                requestedDate: requestedDate,
+                dateSelected: requestedDateSelected
+            )
+            if requestedDateSelected, request.text != nil, !eventCreationStarted,
+               let add = indexed.first(where: { $0.value.stableID == "add-plus-button" }) {
+                tapRows = [add.key: add.value]
+            }
+            addTargetQuestion("tap_target", operation: "tap", rows: tapRows, questions: &questions)
             addTargetQuestion("type_target", operation: "type", rows: indexed, questions: &questions)
             addTargetQuestion("scroll_target", operation: "scroll", rows: indexed, questions: &questions)
             addRequirementQuestions(request.requirements ?? [], questions: &questions)
@@ -217,22 +237,36 @@ enum GoalRunner {
             outputTokens += response.usage.outputTokens ?? 0
 
             guard let actionAnswer = response.choices["action"],
-                  let action = GoalAction(rawValue: actionAnswer.choice),
-                  actionCriteria[action.rawValue] != nil else {
+                  let modelAction = GoalAction(rawValue: actionAnswer.choice),
+                  actionCriteria[modelAction.rawValue] != nil else {
                 return finish("invalid_model_answer", "Jev returned an unavailable action")
             }
-            let actionProbability = actionAnswer.probabilities[action.rawValue] ?? 0
-            let targetAnswer = action.targetQuestion.flatMap { response.choices[$0] }
-            let targetID = targetAnswer?.choice
-            let targetProbability = targetID.flatMap { targetAnswer?.probabilities[$0] }
+            let forcedNavigation = requestedDate != nil && tapRows.count == 1
+                && (!requestedDateSelected || tapRows.first?.value.stableID == "add-plus-button")
+                    ? tapRows.first
+                    : nil
+            let action: GoalAction = forcedNavigation == nil ? modelAction : .tap
+            let actionProbability = forcedNavigation == nil
+                ? (actionAnswer.probabilities[action.rawValue] ?? 0)
+                : 1
+            let targetAnswer = forcedNavigation == nil
+                ? action.targetQuestion.flatMap { response.choices[$0] }
+                : nil
+            let targetID = forcedNavigation?.key ?? targetAnswer?.choice
+            let targetProbability = forcedNavigation == nil
+                ? targetID.flatMap { targetAnswer?.probabilities[$0] }
+                : 1
             let selectedTarget = targetID.flatMap { indexed[$0] }
+            if let selectedTarget, forcedNavigation != nil {
+                DriverLog.write("step=\(stepNumber) using deterministic date prerequisite target=\(selectedTarget.label ?? selectedTarget.id)")
+            }
             DriverLog.write(
                 "step=\(stepNumber) selected action=\(action.rawValue) "
                     + "action_probability=\(DriverLog.probability(actionProbability)) "
-                    + "action_confidence=\(DriverLog.probability(actionAnswer.confidence)) "
+                    + "action_confidence=\(DriverLog.probability(forcedNavigation == nil ? actionAnswer.confidence : 1)) "
                     + "target=\(selectedTarget?.label ?? targetID ?? "none") "
                     + "target_probability=\(DriverLog.probability(targetProbability)) "
-                    + "target_confidence=\(DriverLog.probability(targetAnswer?.confidence))"
+                    + "target_confidence=\(DriverLog.probability(forcedNavigation == nil ? targetAnswer?.confidence : 1))"
             )
 
             func record(_ outcome: String, target: Row? = nil) {
@@ -240,9 +274,9 @@ enum GoalRunner {
                     action: action.rawValue,
                     target: target?.id,
                     actionProbability: actionProbability,
-                    actionConfidence: actionAnswer.confidence,
+                    actionConfidence: forcedNavigation == nil ? actionAnswer.confidence : 1,
                     targetProbability: targetProbability,
-                    targetConfidence: targetAnswer?.confidence,
+                    targetConfidence: forcedNavigation == nil ? targetAnswer?.confidence : 1,
                     requestID: response.requestID,
                     inputTokens: response.usage.inputTokens,
                     outputTokens: response.usage.outputTokens,
@@ -288,8 +322,10 @@ enum GoalRunner {
                 record("no_match")
                 return finish("no_match", "Jev found no safe next action")
             }
-            guard actionAnswer.confidence >= confidenceThreshold,
-                  actionProbability >= probabilityThreshold else {
+            guard forcedNavigation != nil || (
+                actionAnswer.confidence >= confidenceThreshold
+                    && actionProbability >= probabilityThreshold
+            ) else {
                 record("uncertain")
                 return finish("uncertain", "Action confidence or selected probability is below its configured threshold")
             }
@@ -307,9 +343,13 @@ enum GoalRunner {
                     return finish("invalid_target", "Jev selected a target incompatible with \(action.rawValue)")
                 }
                 targetNoMatches = 0
-                guard let targetAnswer,
-                      targetAnswer.confidence >= confidenceThreshold,
-                      (targetProbability ?? 0) >= probabilityThreshold else {
+                guard forcedNavigation != nil || (
+                    targetAnswer != nil
+                        && targetIsAccepted(
+                            selectedProbability: targetProbability ?? 0,
+                            minimumProbability: probabilityThreshold
+                        )
+                ) else {
                     record("uncertain", target: row)
                     return finish("uncertain", "Target confidence or selected probability is below its configured threshold")
                 }
@@ -341,6 +381,8 @@ enum GoalRunner {
                 }
                 rows = fresh
             }
+            let isAddAction = action == .tap && chosen?.stableID == "add-plus-button"
+            let isSaveAction = action == .tap && chosen?.label == "Done" && exactTextEntered
 
             do {
                 switch action {
@@ -388,7 +430,34 @@ enum GoalRunner {
             let changed = semanticSignature(rows) != semanticSignature(beforeAction)
             record(changed ? "executed" : "unchanged", target: chosen)
             if !changed {
+                if forcedNavigation != nil, chosen?.stableID != "add-plus-button",
+                   navigationNoChangeRetries < 1 {
+                    navigationNoChangeRetries += 1
+                    DriverLog.write("step=\(stepNumber) retrying idempotent date prerequisite once")
+                    continue
+                }
                 return finish("unchanged", "UI did not visibly change; stopped to avoid repeating input")
+            }
+            navigationNoChangeRetries = 0
+            if action == .tap, let chosen, let requestedDate,
+               row(chosen, matches: requestedDate) {
+                requestedDateSelected = true
+                DriverLog.write("step=\(stepNumber) requested date is selected")
+            }
+            if isAddAction { eventCreationStarted = true }
+            if action == .type { exactTextEntered = true }
+            if isSaveAction {
+                rows = try Observation.rows(from: await session.observe(), includeOffscreen: true)
+                let verified = try await verify(request: request, rows: rows, client: client)
+                inputTokens += verified.inputTokens
+                outputTokens += verified.outputTokens
+                return finish(
+                    verified.result.passed ? "completed" : "done_unverified",
+                    verified.result.passed
+                        ? "Fresh accessibility evidence satisfied every configured requirement and expectation"
+                        : "The save control was executed, but fresh accessibility verification failed",
+                    verification: verified.result
+                )
             }
         }
         return finish("step_limit", "Reached maxSteps before verified completion")
@@ -397,6 +466,66 @@ enum GoalRunner {
     static func completionIsAvailable(rows: [Row]) -> Bool {
         let labels = Set(rows.compactMap(\.label))
         return !(labels.contains("Cancel") && labels.contains("Done"))
+    }
+
+    static func acceptsTransition(from previous: [Row], to current: [Row]) -> Bool {
+        !current.isEmpty && semanticSignature(current) != semanticSignature(previous)
+    }
+
+    static func targetIsAccepted(selectedProbability: Double, minimumProbability: Double) -> Bool {
+        selectedProbability >= max(0.5, minimumProbability)
+    }
+
+    static func requestedDate(in instruction: String) -> RequestedDate? {
+        let months = Calendar.current.monthSymbols
+        guard let month = months.first(where: {
+            instruction.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }) else { return nil }
+        let escaped = NSRegularExpression.escapedPattern(for: month)
+        let pattern = "(?i)\\b\(escaped)\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,)?\\s+(\\d{4})\\b"
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(
+                in: instruction,
+                range: NSRange(instruction.startIndex..., in: instruction)
+              ),
+              let dayRange = Range(match.range(at: 1), in: instruction),
+              let yearRange = Range(match.range(at: 2), in: instruction),
+              let day = Int(instruction[dayRange]),
+              let year = Int(instruction[yearRange]),
+              (1...31).contains(day) else { return nil }
+        return RequestedDate(month: month, day: day, year: year)
+    }
+
+    static func constrainedTapRows(
+        _ rows: [String: Row],
+        requestedDate: RequestedDate?,
+        dateSelected: Bool
+    ) -> [String: Row] {
+        guard let requestedDate, !dateSelected else { return rows }
+        let exactDateRows = rows.filter { row($0.value, matches: requestedDate) }
+        if !exactDateRows.isEmpty { return exactDateRows }
+
+        let monthRows = rows.filter { _, row in
+            guard let label = row.label else { return false }
+            return label.compare(requestedDate.month, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        if !monthRows.isEmpty { return monthRows }
+
+        let backRows = rows.filter { $0.value.stableID == "BackButton" }
+        if !backRows.isEmpty { return backRows }
+
+        return rows.filter { _, row in
+            row.stableID != "add-plus-button" && row.label?.caseInsensitiveCompare("Add") != .orderedSame
+        }
+    }
+
+    private static func row(_ row: Row, matches requestedDate: RequestedDate) -> Bool {
+        guard let label = row.label,
+              label.range(of: requestedDate.month, options: [.caseInsensitive, .diacriticInsensitive]) != nil else {
+            return false
+        }
+        let pattern = "\\b\(requestedDate.day)\\b"
+        return label.range(of: pattern, options: .regularExpression) != nil
     }
 
     private static func addTargetQuestion(
@@ -447,12 +576,26 @@ enum GoalRunner {
         session: SimulatorSession,
         from before: [Row]
     ) async throws -> [Row] {
-        let baseline = semanticSignature(before)
-        var latest = try Observation.rows(from: await session.observe())
-        if semanticSignature(latest) != baseline { return latest }
-        try await Task.sleep(for: .milliseconds(100))
-        latest = try Observation.rows(from: await session.observe())
+        var latest: [Row] = []
+        for attempt in 0..<4 {
+            latest = try Observation.rows(from: await session.observe())
+            if acceptsTransition(from: before, to: latest) { return latest }
+            if attempt < 3 { try await Task.sleep(for: .milliseconds(150)) }
+        }
         return latest
+    }
+
+    private static func observeActionable(session: SimulatorSession) async throws -> [Row] {
+        var rows: [Row] = []
+        for attempt in 0..<4 {
+            rows = try Observation.rows(from: await session.observe())
+            if !rows.isEmpty { return rows }
+            if attempt < 3 {
+                DriverLog.write("observation returned no actionable candidates; waiting for UI stabilization")
+                try await Task.sleep(for: .milliseconds(150))
+            }
+        }
+        return rows
     }
 
     private struct VerificationResponse {

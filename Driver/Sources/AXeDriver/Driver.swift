@@ -85,7 +85,7 @@ struct Row: Encodable {
 }
 
 enum Observation {
-    static func rows(from data: Data) throws -> [Row] {
+    static func rows(from data: Data, includeOffscreen: Bool = false) throws -> [Row] {
         let decoder = JSONDecoder()
         let roots: [Element]
         if let root = try? decoder.decode(Element.self, from: data) {
@@ -117,7 +117,9 @@ enum Observation {
             let label = element.AXLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
             let value = element.AXValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             let context = label?.isEmpty == false ? label : parent
-            if let frame = element.frame, frame.contained(in: viewport), element.enabled != false {
+            if let frame = element.frame,
+               (includeOffscreen || frame.contained(in: viewport)),
+               element.enabled != false {
                 let editable = role.contains("TextField") || role.contains("TextView") || role.contains("TextArea")
                 let tappable = ["Button", "Cell", "Switch", "CheckBox", "Link", "Tab", "TextField", "TextView", "TextArea", "Picker"]
                     .contains(where: role.contains)

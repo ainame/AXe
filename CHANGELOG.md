@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an `AXeSimulator` library for direct simulator observation and input without adding TypeSafe or API credentials to the ordinary `axe` executable.
 - Added `make setup-axe-driver` to build AXe's simulator dependencies and the standalone driver.
 - Added stderr progress logging for Jev observations, selections, action outcomes, and terminal status while preserving the final JSON result on stdout.
+- Added command-line options to `axe-driver` for running goals without manually constructing stdin JSON.
+
+### Fixed
+
+- Fixed goal runs treating transient empty accessibility snapshots during app launch as stable UI and stopping with `no_match`.
+- Fixed valid targets being rejected solely because Choice confidence was diffuse even when the selected target probability passed the safety threshold.
+- Fixed dated Calendar goals offering creation controls before the requested month and day navigation prerequisites were completed.
+- Fixed saved offscreen Calendar events being omitted from fresh completion verification and causing repeated creation attempts.
 
 ## [v1.8.0] - 2026-07-20
 
