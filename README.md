@@ -80,6 +80,8 @@ printf '%s\n' '{
 
 The driver sends compact accessibility labels and values to TypeSafe's API. Use fixture or test-account data. It asks Jev to select one offered operation and one compatible visible target per step; AXe owns coordinates, freshness checks, HID input, budgets, and final verification. `completed` is returned only after a fresh UI observation satisfies every configured requirement and deterministic expectation. `done_unverified`, `uncertain`, `stale`, and `uncertain_write` return control without retrying a mutation.
 
+Goal runs write progress to standard error for every observation, Jev selection, action outcome, and terminal status. The final machine-readable result remains the only output on standard output, so redirect or pipe it independently. Set `AXE_DRIVER_LOG=0` to suppress progress logging.
+
 Set `observeOnly: true` to inspect actionable rows without calling Jev. `minimumConfidence` defaults to `0.5`; `minimumProbability` is an optional additional gate. Pin `model` for repeatable benchmarks or omit it to use `jev-latest`.
 
 Full documentation is available at [axe-cli.com/docs](https://axe-cli.com/docs).

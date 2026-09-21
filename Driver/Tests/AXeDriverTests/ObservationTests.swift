@@ -97,3 +97,18 @@ func verificationSemantics() {
     )
     #expect(!failed.passed)
 }
+
+@Test("An unsaved editor cannot be mistaken for goal completion")
+@MainActor
+func unsavedEditorBlocksCompletion() throws {
+    let data = Data(#"""
+    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
+      {"role":"AXStaticText","AXLabel":"New Event","frame":{"x":10,"y":20,"width":90,"height":40}},
+      {"role":"AXButton","AXLabel":"Cancel","frame":{"x":10,"y":70,"width":90,"height":40}},
+      {"role":"AXButton","AXLabel":"Done","frame":{"x":300,"y":70,"width":90,"height":40}}
+    ]}
+    """#.utf8)
+    let rows = try Observation.rows(from: data)
+    #expect(!GoalRunner.completionIsAvailable(rows: rows))
+    #expect(GoalAction.goalComplete.rawValue == "goal_complete")
+}

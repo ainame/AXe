@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a separate macOS 26 `axe-driver` package for bounded Jev-assisted simulator goals, returning fresh UI evidence and decision traces to the caller.
 - Added an `AXeSimulator` library for direct simulator observation and input without adding TypeSafe or API credentials to the ordinary `axe` executable.
 - Added `make setup-axe-driver` to build AXe's simulator dependencies and the standalone driver.
+- Added stderr progress logging for Jev observations, selections, action outcomes, and terminal status while preserving the final JSON result on stdout.
 
 ## [v1.8.0] - 2026-07-20
 
