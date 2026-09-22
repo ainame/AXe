@@ -52,8 +52,7 @@ public final class SimulatorSession {
         let element = try await simulator.accessibilityElementForFrontmostApplication()
         defer { element.close() }
         let keys: Set<FBAXKeys> = [
-            .label, .frame, .value, .uniqueID, .type, .title, .frameDict,
-            .help, .enabled, .role, .roleDescription, .subrole, .pid,
+            .label, .frame, .frameDict, .value, .uniqueID, .type, .enabled, .role,
         ]
         let response = try element.serialize(
             with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys)

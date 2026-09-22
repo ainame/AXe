@@ -86,10 +86,42 @@ struct GoalResult: Encodable {
 
 @MainActor
 private enum DriverLog {
+    static var screenReads = 0
+    static var screenMilliseconds = 0
+    static var jevMilliseconds = 0
+    static var inputMilliseconds = 0
+
+    static func reset() {
+        screenReads = 0
+        screenMilliseconds = 0
+        jevMilliseconds = 0
+        inputMilliseconds = 0
+    }
+
+    static func milliseconds(since start: ContinuousClock.Instant) -> Int {
+        let components = start.duration(to: .now).components
+        return Int(components.seconds) * 1_000 + Int(components.attoseconds / 1_000_000_000_000_000)
+    }
+
+    static func observe(_ session: SimulatorSession) async throws -> Data {
+        let start = ContinuousClock.now
+        defer {
+            screenReads += 1
+            screenMilliseconds += milliseconds(since: start)
+        }
+        return try await session.observe()
+    }
     static func write(_ message: String) {
         guard ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] != "0" else { return }
-        let line = "[axe-driver] \(message)\n"
+        let stamp = Date.now.formatted(.iso8601.year().month().day().dateSeparator(.dash)
+            .time(includingFractionalSeconds: true).timeZone(separator: .omitted))
+        let line = "[\(stamp)] \(message)\n"
         FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    static func detail(_ message: String) {
+        guard ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose" else { return }
+        write(message)
     }
 
     static func probability(_ value: Double?) -> String {
@@ -100,6 +132,7 @@ private enum DriverLog {
 @MainActor
 enum GoalRunner {
     static func run(_ request: InteractionRequest) async throws -> GoalResult {
+        DriverLog.reset()
         let started = ContinuousClock.now
         func elapsed() -> Int {
             let duration = started.duration(to: .now).components
@@ -117,8 +150,11 @@ enum GoalRunner {
         var eventCreationStarted = false
         var exactTextEntered = false
         var navigationNoChangeRetries = 0
+        var pendingTransition = false
+        var nonActionRetries = 0
+        var reusePostActionRows = false
         func finish(_ status: String, _ message: String, verification: GoalVerification? = nil) -> GoalResult {
-            DriverLog.write("finished status=\(status) elapsed_ms=\(elapsed()) message=\(message)")
+            DriverLog.write("Result: \(status) — \(message) [elapsed \(elapsed()) ms, steps \(steps.count), AX \(DriverLog.screenReads) reads / \(DriverLog.screenMilliseconds) ms, Jev decisions \(DriverLog.jevMilliseconds) ms, input \(DriverLog.inputMilliseconds) ms]")
             return GoalResult(
                 status: status,
                 message: message,
@@ -161,17 +197,62 @@ enum GoalRunner {
         let client = try TypeSafeClient(model: request.model, retry: RetryPolicy(maxRetries: 0))
         var openedApp = false
         DriverLog.write(
-            "started max_steps=\(maxSteps) confidence_threshold=\(DriverLog.probability(confidenceThreshold)) "
-                + "probability_threshold=\(DriverLog.probability(probabilityThreshold))"
+            "Goal started: \(request.instruction) [max \(maxSteps) steps, confidence ≥\(DriverLog.probability(confidenceThreshold)), probability ≥\(DriverLog.probability(probabilityThreshold))]"
         )
 
-        for stepNumber in 1...maxSteps {
-            do { rows = try await observeActionable(session: session) }
-            catch {
-                if request.appBundleID == nil || openedApp { throw error }
-                rows = []
+        for stepNumber in 1...(maxSteps + 2) {
+            if stepNumber > maxSteps + nonActionRetries { break }
+            let stepStarted = elapsed()
+            let readsBeforeStep = DriverLog.screenReads
+            let readMillisecondsBeforeStep = DriverLog.screenMilliseconds
+            if stepNumber == 1, let bundleID = request.appBundleID {
+                do {
+                    try await session.openApp(bundleID: bundleID)
+                } catch {
+                    return finish("launch_failed", "Could not open \(request.appName ?? bundleID): \(error)")
+                }
+                openedApp = true
+                pendingTransition = true
+                steps.append(GoalStep(
+                    action: GoalAction.openApp.rawValue, target: bundleID,
+                    actionProbability: 1, actionConfidence: 1,
+                    targetProbability: nil, targetConfidence: nil,
+                    requestID: nil, inputTokens: nil, outputTokens: nil, outcome: "executed"
+                ))
+                DriverLog.write("1. OPEN APP → \(request.appName ?? bundleID) (\(bundleID)) [step \(elapsed() - stepStarted) ms]")
+                continue
             }
-            DriverLog.write("step=\(stepNumber) observed candidates=\(rows.count)")
+            if !reusePostActionRows || rows.isEmpty {
+                do { rows = try await observeActionable(session: session, udid: request.simulatorUDID) }
+                catch {
+                    if request.appBundleID == nil || openedApp { throw error }
+                    rows = []
+                }
+            }
+            reusePostActionRows = false
+            if rows.isEmpty && pendingTransition {
+                DriverLog.write("Waiting: no actionable controls visible after the previous input")
+                guard let refreshed = try await waitForUIChange(from: rows, timeout: .seconds(8), observe: {
+                    try await observeRows(session: session, udid: request.simulatorUDID)
+                }) else {
+                    return finish("launch_timeout", "No actionable UI appeared within eight seconds after input")
+                }
+                rows = refreshed
+            }
+            if pendingTransition && shouldSettleNavigation(
+                rows: rows,
+                requestedDate: requestedDate,
+                dateSelected: requestedDateSelected,
+                afterLaunch: steps.last?.action == GoalAction.openApp.rawValue
+            ) {
+                guard let settled = try await stableRows(startingWith: rows, timeout: .seconds(5), observe: {
+                    try await observeRows(session: session, udid: request.simulatorUDID)
+                }) else {
+                    return finish("ui_unstable", "Accessibility UI did not settle after input")
+                }
+                rows = settled
+            }
+            DriverLog.detail("step=\(stepNumber) observed candidates=\(rows.count)")
 
             let indexed = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ("e\($0.offset)", $0.element) })
             let compact = compactRows(rows)
@@ -221,52 +302,67 @@ enum GoalRunner {
             addTargetQuestion("scroll_target", operation: "scroll", rows: indexed, questions: &questions)
             addRequirementQuestions(request.requirements ?? [], questions: &questions)
 
-            let history = steps.suffix(6).map { "\($0.action)|\($0.target ?? "none")|\($0.outcome)" }
-            DriverLog.write("step=\(stepNumber) requesting Jev decision")
-            let response = try await client.systemOne(
-                state: [
-                    "goal": .string(request.instruction),
-                    "exact_text": request.text.map(JSONValue.string) ?? .null,
-                    "app": .string(request.appName ?? request.appBundleID ?? ""),
-                    "visible_ui": .array(compact.map(JSONValue.string)),
-                    "recent_actions": .array(history.map(JSONValue.string)),
-                ],
-                questions: questions
-            )
-            inputTokens += response.usage.inputTokens ?? 0
-            outputTokens += response.usage.outputTokens ?? 0
-
-            guard let actionAnswer = response.choices["action"],
-                  let modelAction = GoalAction(rawValue: actionAnswer.choice),
-                  actionCriteria[modelAction.rawValue] != nil else {
-                return finish("invalid_model_answer", "Jev returned an unavailable action")
-            }
             let forcedNavigation = requestedDate != nil && tapRows.count == 1
                 && (!requestedDateSelected || tapRows.first?.value.stableID == "add-plus-button")
                     ? tapRows.first
                     : nil
-            let action: GoalAction = forcedNavigation == nil ? modelAction : .tap
-            let actionProbability = forcedNavigation == nil
-                ? (actionAnswer.probabilities[action.rawValue] ?? 0)
+            let forcedSave = exactTextEntered && Self.editorIsReadyToSave(
+                rows: rows, exactText: request.text, requestedDate: requestedDate
+            ) ? indexed.first(where: { $0.value.label == "Done" && $0.value.role == "AXButton" }) : nil
+            let forcedType = eventCreationStarted && Self.editorIsReadyForTitle(
+                rows: rows, exactText: request.text
+            ) ? indexed.first(where: { $0.value.stableID == "title-field" && $0.value.actions.contains("type") }) : nil
+            let forcedTarget = forcedNavigation ?? forcedType ?? forcedSave
+            var response: SystemOneResponse?
+            var jevMilliseconds = 0
+            if forcedTarget == nil {
+                let history = steps.suffix(6).map { "\($0.action)|\($0.target ?? "none")|\($0.outcome)" }
+                let jevStarted = elapsed()
+                DriverLog.detail("step=\(stepNumber) requesting Jev decision")
+                response = try await client.systemOne(
+                    state: [
+                        "goal": .string(request.instruction),
+                        "exact_text": request.text.map(JSONValue.string) ?? .null,
+                        "app": .string(request.appName ?? request.appBundleID ?? ""),
+                        "visible_ui": .array(compact.map(JSONValue.string)),
+                        "recent_actions": .array(history.map(JSONValue.string)),
+                    ],
+                    questions: questions
+                )
+                jevMilliseconds = elapsed() - jevStarted
+                DriverLog.jevMilliseconds += jevMilliseconds
+                inputTokens += response?.usage.inputTokens ?? 0
+                outputTokens += response?.usage.outputTokens ?? 0
+            } else {
+                DriverLog.detail("step=\(stepNumber) using deterministic target without a Jev decision")
+            }
+            let actionAnswer = response?.choices["action"]
+            let modelAction = actionAnswer.flatMap { GoalAction(rawValue: $0.choice) }
+            if forcedTarget == nil && (modelAction == nil || actionCriteria[modelAction!.rawValue] == nil) {
+                return finish("invalid_model_answer", "Jev returned an unavailable action")
+            }
+            let action: GoalAction = forcedType != nil ? .type : (forcedTarget == nil ? modelAction! : .tap)
+            let actionProbability = forcedTarget == nil
+                ? (actionAnswer?.probabilities[action.rawValue] ?? 0)
                 : 1
-            let targetAnswer = forcedNavigation == nil
-                ? action.targetQuestion.flatMap { response.choices[$0] }
+            let targetAnswer = forcedTarget == nil
+                ? action.targetQuestion.flatMap { response?.choices[$0] }
                 : nil
-            let targetID = forcedNavigation?.key ?? targetAnswer?.choice
-            let targetProbability = forcedNavigation == nil
+            let targetID = forcedTarget?.key ?? targetAnswer?.choice
+            let targetProbability = forcedTarget == nil
                 ? targetID.flatMap { targetAnswer?.probabilities[$0] }
                 : 1
             let selectedTarget = targetID.flatMap { indexed[$0] }
             if let selectedTarget, forcedNavigation != nil {
-                DriverLog.write("step=\(stepNumber) using deterministic date prerequisite target=\(selectedTarget.label ?? selectedTarget.id)")
+                DriverLog.detail("step=\(stepNumber) using deterministic date prerequisite target=\(selectedTarget.label ?? selectedTarget.id)")
             }
-            DriverLog.write(
+            DriverLog.detail(
                 "step=\(stepNumber) selected action=\(action.rawValue) "
                     + "action_probability=\(DriverLog.probability(actionProbability)) "
-                    + "action_confidence=\(DriverLog.probability(forcedNavigation == nil ? actionAnswer.confidence : 1)) "
+                    + "action_confidence=\(DriverLog.probability(forcedTarget == nil ? actionAnswer?.confidence : 1)) "
                     + "target=\(selectedTarget?.label ?? targetID ?? "none") "
                     + "target_probability=\(DriverLog.probability(targetProbability)) "
-                    + "target_confidence=\(DriverLog.probability(forcedNavigation == nil ? targetAnswer?.confidence : 1))"
+                    + "target_confidence=\(DriverLog.probability(forcedTarget == nil ? targetAnswer?.confidence : 1))"
             )
 
             func record(_ outcome: String, target: Row? = nil) {
@@ -274,24 +370,22 @@ enum GoalRunner {
                     action: action.rawValue,
                     target: target?.id,
                     actionProbability: actionProbability,
-                    actionConfidence: forcedNavigation == nil ? actionAnswer.confidence : 1,
+                    actionConfidence: forcedTarget == nil ? (actionAnswer?.confidence ?? 0) : 1,
                     targetProbability: targetProbability,
-                    targetConfidence: forcedNavigation == nil ? targetAnswer?.confidence : 1,
-                    requestID: response.requestID,
-                    inputTokens: response.usage.inputTokens,
-                    outputTokens: response.usage.outputTokens,
+                    targetConfidence: forcedTarget == nil ? targetAnswer?.confidence : 1,
+                    requestID: response?.requestID,
+                    inputTokens: response?.usage.inputTokens,
+                    outputTokens: response?.usage.outputTokens,
                     outcome: outcome
                 ))
-                DriverLog.write(
-                    "step=\(stepNumber) outcome=\(outcome) action=\(action.rawValue) "
-                        + "target=\(target?.label ?? selectedTarget?.label ?? targetID ?? "none") "
-                        + "elapsed_ms=\(elapsed())"
-                )
+                let label = target?.label ?? selectedTarget?.label ?? target?.stableID ?? targetID ?? "none"
+                let operation = action == .type ? "TYPE" : action.rawValue.uppercased()
+                DriverLog.write("\(stepNumber). \(operation) → \(label) [\(outcome), p=\(DriverLog.probability(targetProbability ?? actionProbability)), Jev \(jevMilliseconds) ms, AX \(DriverLog.screenReads - readsBeforeStep) reads / \(DriverLog.screenMilliseconds - readMillisecondsBeforeStep) ms, step \(elapsed() - stepStarted) ms]")
             }
 
             if action == .goalComplete {
                 let requirementsSatisfied = (request.requirements ?? []).indices.allSatisfy {
-                    (response.nouls["requirement_\($0)"]?.noul ?? 0) >= 0.8
+                    (response?.nouls["requirement_\($0)"]?.noul ?? 0) >= 0.8
                 }
                 if !requirementsSatisfied, completionRejections < 2 {
                     completionRejections += 1
@@ -299,7 +393,7 @@ enum GoalRunner {
                     continue
                 }
                 record("declared_done")
-                rows = try Observation.rows(from: await session.observe())
+                rows = try await observeRows(session: session, udid: request.simulatorUDID)
                 let verified = try await verify(request: request, rows: rows, client: client)
                 inputTokens += verified.inputTokens
                 outputTokens += verified.outputTokens
@@ -319,18 +413,29 @@ enum GoalRunner {
                 )
             }
             if action == .noMatch {
+                if pendingTransition && nonActionRetries < 2,
+                   let refreshed = try await waitForUIChange(from: rows, timeout: .seconds(8), observe: {
+                       try await observeRows(session: session, udid: request.simulatorUDID)
+                   }) {
+                    rows = refreshed
+                    pendingTransition = false
+                    nonActionRetries += 1
+                    record("transient_no_match")
+                    DriverLog.write("Retrying decision: the screen changed after Jev returned no match; no input was repeated")
+                    continue
+                }
                 record("no_match")
                 return finish("no_match", "Jev found no safe next action")
             }
-            guard forcedNavigation != nil || (
-                actionAnswer.confidence >= confidenceThreshold
+            guard forcedTarget != nil || (
+                (actionAnswer?.confidence ?? 0) >= confidenceThreshold
                     && actionProbability >= probabilityThreshold
             ) else {
                 record("uncertain")
                 return finish("uncertain", "Action confidence or selected probability is below its configured threshold")
             }
 
-            let chosen: Row?
+            var chosen: Row?
             if let requiredAction = action.rowAction {
                 if targetID == "no_match", targetNoMatches < 1 {
                     targetNoMatches += 1
@@ -343,7 +448,7 @@ enum GoalRunner {
                     return finish("invalid_target", "Jev selected a target incompatible with \(action.rawValue)")
                 }
                 targetNoMatches = 0
-                guard forcedNavigation != nil || (
+                guard forcedTarget != nil || (
                     targetAnswer != nil
                         && targetIsAccepted(
                             selectedProbability: targetProbability ?? 0,
@@ -358,14 +463,21 @@ enum GoalRunner {
                 chosen = nil
             }
 
-            if let chosen {
-                let fresh = try Observation.rows(from: await session.observe())
-                guard let target = fresh.first(where: { $0.id == chosen.id }),
-                      target.fingerprint == chosen.fingerprint,
-                      target.frame == chosen.frame else {
+            if let selected = chosen {
+                let settled = try await stableTarget(for: selected, timeout: .seconds(3), observe: {
+                    try await observeRows(session: session, udid: request.simulatorUDID)
+                })
+                guard let (target, fresh) = settled else {
+                    let fresh = try await observeRows(session: session, udid: request.simulatorUDID)
                     rows = fresh
-                    record("stale", target: chosen)
-                    return finish("stale", "Selected target changed before execution")
+                    if nonActionRetries < 2 {
+                        nonActionRetries += 1
+                        record("replan_stale", target: selected)
+                        DriverLog.write("Retrying decision: target moved or disappeared before input")
+                        continue
+                    }
+                    record("stale", target: selected)
+                    return finish("stale", "Selected target did not stabilize before execution")
                 }
                 if action == .type, let text = request.text {
                     if target.value == text {
@@ -380,10 +492,21 @@ enum GoalRunner {
                     }
                 }
                 rows = fresh
+                chosen = target
             }
             let isAddAction = action == .tap && chosen?.stableID == "add-plus-button"
-            let isSaveAction = action == .tap && chosen?.label == "Done" && exactTextEntered
+            let isSaveAction = action == .tap && chosen?.label == "Done" && eventCreationStarted
+            if isSaveAction, let requestedDate,
+               !Self.editorIsReadyToSave(rows: rows, exactText: request.text, requestedDate: requestedDate) {
+                let observedTitle = rows.first(where: { $0.stableID == "title-field" && $0.actions.contains("type") })?.value ?? "<missing>"
+                record("save_precondition_failed", target: chosen)
+                return finish(
+                    "save_precondition_failed",
+                    "Not saving: editor title is \"\(observedTitle)\" or the start date differs from the requested value"
+                )
+            }
 
+            let inputStarted = elapsed()
             do {
                 switch action {
                 case .tap:
@@ -419,21 +542,32 @@ enum GoalRunner {
                 record("uncertain_write", target: chosen)
                 return finish("uncertain_write", "Input may have been sent: \(error). Inspect fresh UI before retrying.")
             }
+            DriverLog.inputMilliseconds += elapsed() - inputStarted
 
             let beforeAction = rows
             do {
-                rows = try await observeUntilChanged(session: session, from: beforeAction)
+                rows = try await observeUntilChanged(session: session, udid: request.simulatorUDID, from: beforeAction)
             } catch {
                 record("executed_unverified", target: chosen)
                 return finish("executed_unverified", "Input was sent but follow-up observation failed: \(error)")
             }
+            reusePostActionRows = true
             let changed = semanticSignature(rows) != semanticSignature(beforeAction)
+            if !changed, action == .tap, let chosen, let requestedDate,
+               row(chosen, matches: requestedDate),
+               try await currentDateIsSelected(session: session, udid: request.simulatorUDID, requestedDate: requestedDate) {
+                requestedDateSelected = true
+                navigationNoChangeRetries = 0
+                record("already_selected", target: chosen)
+                DriverLog.write("Requested date is already selected; continuing to creation")
+                continue
+            }
             record(changed ? "executed" : "unchanged", target: chosen)
             if !changed {
                 if forcedNavigation != nil, chosen?.stableID != "add-plus-button",
                    navigationNoChangeRetries < 1 {
                     navigationNoChangeRetries += 1
-                    DriverLog.write("step=\(stepNumber) retrying idempotent date prerequisite once")
+                    DriverLog.write("Retrying unchanged date navigation once")
                     continue
                 }
                 return finish("unchanged", "UI did not visibly change; stopped to avoid repeating input")
@@ -442,12 +576,13 @@ enum GoalRunner {
             if action == .tap, let chosen, let requestedDate,
                row(chosen, matches: requestedDate) {
                 requestedDateSelected = true
-                DriverLog.write("step=\(stepNumber) requested date is selected")
+                DriverLog.detail("step=\(stepNumber) requested date is selected")
             }
             if isAddAction { eventCreationStarted = true }
             if action == .type { exactTextEntered = true }
+            pendingTransition = action == .openApp || action == .tap
             if isSaveAction {
-                rows = try Observation.rows(from: await session.observe(), includeOffscreen: true)
+                rows = try await observeRows(session: session, udid: request.simulatorUDID, includeOffscreen: true)
                 let verified = try await verify(request: request, rows: rows, client: client)
                 inputTokens += verified.inputTokens
                 outputTokens += verified.outputTokens
@@ -472,16 +607,85 @@ enum GoalRunner {
         !current.isEmpty && semanticSignature(current) != semanticSignature(previous)
     }
 
+    static func waitForUIChange(
+        from previous: [Row],
+        timeout: Duration,
+        observe: () async throws -> [Row]
+    ) async throws -> [Row]? {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        repeat {
+            let current = try await observe()
+            if acceptsTransition(from: previous, to: current) { return current }
+            if ContinuousClock.now >= deadline { return nil }
+            try await Task.sleep(for: .milliseconds(200))
+        } while true
+    }
+
+    static func stableRows(
+        startingWith initial: [Row],
+        timeout: Duration,
+        observe: () async throws -> [Row]
+    ) async throws -> [Row]? {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var previous = initial
+        repeat {
+            try await Task.sleep(for: .milliseconds(150))
+            let current = try await observe()
+            if !current.isEmpty && semanticSignature(current) == semanticSignature(previous) {
+                return current
+            }
+            previous = current
+            if ContinuousClock.now >= deadline { return nil }
+        } while true
+    }
+
+    static func stableTarget(
+        for selected: Row,
+        timeout: Duration,
+        observe: () async throws -> [Row]
+    ) async throws -> (Row, [Row])? {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var previous: Row? = selected
+        repeat {
+            let rows = try await observe()
+            let matching = rows.filter { $0.fingerprint == selected.fingerprint }
+            let target = matching.count == 1 ? matching[0] : matching.first(where: { $0.id == selected.id })
+            if let target, let previous,
+               abs(target.frame.centerX - previous.frame.centerX) < 1,
+               abs(target.frame.centerY - previous.frame.centerY) < 1 {
+                return (target, rows)
+            }
+            previous = target
+            if ContinuousClock.now >= deadline { return nil }
+            try await Task.sleep(for: .milliseconds(120))
+        } while true
+    }
+
     static func targetIsAccepted(selectedProbability: Double, minimumProbability: Double) -> Bool {
         selectedProbability >= max(0.5, minimumProbability)
     }
 
+    static func shouldSettleNavigation(
+        rows: [Row], requestedDate: RequestedDate?, dateSelected: Bool, afterLaunch: Bool
+    ) -> Bool {
+        if afterLaunch || rows.isEmpty { return true }
+        guard let requestedDate, !dateSelected else { return false }
+        let indexed = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ("e\($0.offset)", $0.element) })
+        let candidates = constrainedTapRows(indexed, requestedDate: requestedDate, dateSelected: false)
+        return candidates.count == 1 && candidates.first?.value.stableID == "BackButton"
+    }
+
     static func requestedDate(in instruction: String) -> RequestedDate? {
-        let months = Calendar.current.monthSymbols
-        guard let month = months.first(where: {
-            instruction.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        guard let months = formatter.monthSymbols, let shortMonths = formatter.shortMonthSymbols else { return nil }
+        guard let monthIndex = months.indices.first(where: { index in
+            [months[index], shortMonths[index]].contains { symbol in
+                instruction.range(of: "\\b\(NSRegularExpression.escapedPattern(for: symbol))\\b", options: [.regularExpression, .caseInsensitive]) != nil
+            }
         }) else { return nil }
-        let escaped = NSRegularExpression.escapedPattern(for: month)
+        let month = months[monthIndex]
+        let escaped = "(?:\(NSRegularExpression.escapedPattern(for: month))|\(NSRegularExpression.escapedPattern(for: shortMonths[monthIndex])))"
         let pattern = "(?i)\\b\(escaped)\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,)?\\s+(\\d{4})\\b"
         guard let expression = try? NSRegularExpression(pattern: pattern),
               let match = expression.firstMatch(
@@ -494,6 +698,64 @@ enum GoalRunner {
               let year = Int(instruction[yearRange]),
               (1...31).contains(day) else { return nil }
         return RequestedDate(month: month, day: day, year: year)
+    }
+
+    static func currentDateMatches(_ data: Data, requestedDate: RequestedDate) -> Bool {
+        let decoder = JSONDecoder()
+        let roots: [Element]
+        if let root = try? decoder.decode(Element.self, from: data) {
+            roots = [root]
+        } else if let decoded = try? decoder.decode([Element].self, from: data) {
+            roots = decoded
+        } else {
+            return false
+        }
+        let month = NSRegularExpression.escapedPattern(for: requestedDate.month)
+        let shortMonth = NSRegularExpression.escapedPattern(for: String(requestedDate.month.prefix(3)))
+        let pattern = "(?i)\\b\(requestedDate.day)\\s+(?:\(month)|\(shortMonth))\\s+\(requestedDate.year)\\b"
+        func matches(_ element: Element) -> Bool {
+            if element.AXUniqueId == "current-day", let label = element.AXLabel,
+               label.range(of: pattern, options: .regularExpression) != nil { return true }
+            return (element.children ?? []).contains(where: matches)
+        }
+        return roots.contains(where: matches)
+    }
+
+    static func editorIsReadyToSave(
+        rows: [Row], exactText: String?, requestedDate: RequestedDate?
+    ) -> Bool {
+        guard let exactText, let requestedDate,
+              rows.filter({ $0.label == "Done" && $0.role == "AXButton" }).count == 1,
+              rows.contains(where: { $0.stableID == "title-field" && $0.value == exactText }) else {
+            return false
+        }
+        let month = NSRegularExpression.escapedPattern(for: requestedDate.month)
+        let shortMonth = NSRegularExpression.escapedPattern(for: String(requestedDate.month.prefix(3)))
+        let pattern = "(?i)^\(requestedDate.day)\\s+(?:\(month)|\(shortMonth))\\s+\(requestedDate.year)$"
+        return rows.contains {
+            $0.stableID == "start-date-picker-cell"
+                && $0.label?.range(of: pattern, options: .regularExpression) != nil
+        }
+    }
+
+    static func editorIsReadyForTitle(rows: [Row], exactText: String?) -> Bool {
+        guard exactText?.isEmpty == false,
+              rows.contains(where: { $0.label == "Cancel" && $0.role == "AXButton" }),
+              rows.contains(where: { $0.label == "Done" && $0.role == "AXButton" }) else {
+            return false
+        }
+        let fields = rows.filter { $0.stableID == "title-field" && $0.actions.contains("type") }
+        guard fields.count == 1 else { return false }
+        let field = fields[0]
+        return field.value == nil || field.value?.isEmpty == true || field.value == field.label
+    }
+
+    private static func currentDateIsSelected(
+        session: SimulatorSession,
+        udid: String,
+        requestedDate: RequestedDate
+    ) async throws -> Bool {
+        currentDateMatches(try await observeData(session: session, udid: udid), requestedDate: requestedDate)
     }
 
     static func constrainedTapRows(
@@ -574,28 +836,95 @@ enum GoalRunner {
 
     private static func observeUntilChanged(
         session: SimulatorSession,
+        udid: String,
         from before: [Row]
     ) async throws -> [Row] {
         var latest: [Row] = []
         for attempt in 0..<4 {
-            latest = try Observation.rows(from: await session.observe())
+            latest = try await observeRows(session: session, udid: udid)
             if acceptsTransition(from: before, to: latest) { return latest }
             if attempt < 3 { try await Task.sleep(for: .milliseconds(150)) }
         }
         return latest
     }
 
-    private static func observeActionable(session: SimulatorSession) async throws -> [Row] {
+    private static func observeActionable(session: SimulatorSession, udid: String) async throws -> [Row] {
         var rows: [Row] = []
         for attempt in 0..<4 {
-            rows = try Observation.rows(from: await session.observe())
+            rows = try await observeRows(session: session, udid: udid)
             if !rows.isEmpty { return rows }
             if attempt < 3 {
-                DriverLog.write("observation returned no actionable candidates; waiting for UI stabilization")
+                DriverLog.write("Waiting: accessibility returned no actionable controls")
                 try await Task.sleep(for: .milliseconds(150))
             }
         }
         return rows
+    }
+
+    private static func observeRows(
+        session: SimulatorSession,
+        udid: String,
+        includeOffscreen: Bool = false
+    ) async throws -> [Row] {
+        try Observation.rows(
+            from: await observeData(session: session, udid: udid),
+            includeOffscreen: includeOffscreen
+        )
+    }
+
+    private static func observeData(session: SimulatorSession, udid: String) async throws -> Data {
+        do {
+            return try await DriverLog.observe(session)
+        } catch {
+            DriverLog.write("Warning: accessibility read failed; reconnecting without repeating input (\(error))")
+            var lastError = error
+            for _ in 0..<4 {
+                try await Task.sleep(for: .milliseconds(250))
+                do {
+                    let fresh = try SimulatorSession(udid: udid)
+                    return try await DriverLog.observe(fresh)
+                } catch {
+                    lastError = error
+                }
+            }
+            DriverLog.write("Warning: in-process accessibility reconnect failed; trying AXe in a fresh process")
+            let started = ContinuousClock.now
+            do {
+                let data = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let process = Process()
+                    let environment = ProcessInfo.processInfo.environment
+                    let candidates = [
+                        environment["AXE_BIN_PATH"],
+                        FileManager.default.currentDirectoryPath + "/.build/out/Products/Debug/axe",
+                    ].compactMap { $0 }
+                    if let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                        process.executableURL = URL(fileURLWithPath: executable)
+                        process.arguments = ["describe-ui", "--udid", udid]
+                    } else {
+                        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                        process.arguments = ["axe", "describe-ui", "--udid", udid]
+                    }
+                    let output = Pipe()
+                    process.standardOutput = output
+                    process.standardError = FileHandle.nullDevice
+                    try process.run()
+                    let data = output.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    guard process.terminationStatus == 0 else {
+                        throw NSError(domain: "AXeDriver", code: Int(process.terminationStatus),
+                                      userInfo: [NSLocalizedDescriptionKey: "axe describe-ui failed"])
+                    }
+                    return data
+                }.value
+                DriverLog.screenReads += 1
+                DriverLog.screenMilliseconds += DriverLog.milliseconds(since: started)
+                DriverLog.write("Accessibility recovered in a fresh AXe process")
+                return data
+            } catch {
+                DriverLog.write("Warning: fresh-process accessibility recovery failed: \(error)")
+                throw lastError
+            }
+        }
     }
 
     private struct VerificationResponse {
