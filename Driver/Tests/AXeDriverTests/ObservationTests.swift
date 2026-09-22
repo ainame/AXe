@@ -202,6 +202,7 @@ func dateNavigationCandidates() throws {
     let navigation = GoalRunner.constrainedTapRows(indexed, requestedDate: requested, dateSelected: false)
     #expect(navigation.values.map(\.stableID) == ["BackButton"])
     #expect(GoalRunner.shouldSettleNavigation(rows: september, requestedDate: requested, dateSelected: false, afterLaunch: false))
+    #expect(GoalRunner.shouldSettleNavigation(rows: september, requestedDate: requested, dateSelected: false, afterLaunch: true))
 
     let august = try Observation.rows(from: Data(#"""
     {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
@@ -213,6 +214,8 @@ func dateNavigationCandidates() throws {
     let date = GoalRunner.constrainedTapRows(augustIndexed, requestedDate: requested, dateSelected: false)
     #expect(date.values.map(\.label) == ["Thursday 20 August"])
     #expect(!GoalRunner.shouldSettleNavigation(rows: august, requestedDate: requested, dateSelected: false, afterLaunch: false))
+    #expect(GoalRunner.shouldSettleNavigation(rows: [], requestedDate: requested, dateSelected: false, afterLaunch: true))
+    #expect(GoalRunner.shouldSettleNavigation(rows: august, requestedDate: nil, dateSelected: false, afterLaunch: true))
 }
 
 @Test("Quoted event goal derives exact text and date-specific verification")

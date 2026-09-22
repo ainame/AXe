@@ -582,10 +582,15 @@ enum GoalRunner {
             if action == .type { exactTextEntered = true }
             pendingTransition = action == .openApp || action == .tap
             if isSaveAction {
-                rows = try await observeRows(session: session, udid: request.simulatorUDID, includeOffscreen: true)
-                let verified = try await verify(request: request, rows: rows, client: client)
+                var verified = try await verify(request: request, rows: rows, client: client)
                 inputTokens += verified.inputTokens
                 outputTokens += verified.outputTokens
+                if !verified.result.passed {
+                    rows = try await observeRows(session: session, udid: request.simulatorUDID, includeOffscreen: true)
+                    verified = try await verify(request: request, rows: rows, client: client)
+                    inputTokens += verified.inputTokens
+                    outputTokens += verified.outputTokens
+                }
                 return finish(
                     verified.result.passed ? "completed" : "done_unverified",
                     verified.result.passed
@@ -668,11 +673,14 @@ enum GoalRunner {
     static func shouldSettleNavigation(
         rows: [Row], requestedDate: RequestedDate?, dateSelected: Bool, afterLaunch: Bool
     ) -> Bool {
-        if afterLaunch || rows.isEmpty { return true }
-        guard let requestedDate, !dateSelected else { return false }
+        if rows.isEmpty { return true }
+        guard let requestedDate, !dateSelected else { return afterLaunch }
         let indexed = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ("e\($0.offset)", $0.element) })
         let candidates = constrainedTapRows(indexed, requestedDate: requestedDate, dateSelected: false)
-        return candidates.count == 1 && candidates.first?.value.stableID == "BackButton"
+        // A unique navigation target gets a fresh position check in stableTarget before input.
+        let hasUniqueTap = candidates.count == 1 && candidates.first?.value.actions.contains("tap") == true
+        let isBackTransition = candidates.count == 1 && candidates.first?.value.stableID == "BackButton"
+        return isBackTransition || (afterLaunch && !hasUniqueTap)
     }
 
     static func requestedDate(in instruction: String) -> RequestedDate? {
