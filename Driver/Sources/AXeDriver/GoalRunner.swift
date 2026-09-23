@@ -24,6 +24,7 @@ enum GoalRunner {
         var exactTextEntered = false
         var navigationNoChangeRetries = 0
         var pendingTransition = false
+        var pendingBackTransition = false
         var nonActionRetries = 0
         var reusePostActionRows = false
         func finish(_ status: String, _ message: String, verification: GoalVerification? = nil) -> GoalResult {
@@ -112,12 +113,12 @@ enum GoalRunner {
                 }
                 rows = refreshed
             }
-            if pendingTransition && shouldSettleNavigation(
+            if pendingTransition && (pendingBackTransition || shouldSettleNavigation(
                 rows: rows,
                 requestedDate: requestedDate,
                 dateSelected: requestedDateSelected,
                 afterLaunch: steps.last?.action == GoalAction.openApp.rawValue
-            ) {
+            )) {
                 guard let settled = try await stableRows(startingWith: rows, timeout: .seconds(5), observe: {
                     try await observeRows(session: session, udid: request.simulatorUDID)
                 }) else {
@@ -125,6 +126,7 @@ enum GoalRunner {
                 }
                 rows = settled
             }
+            pendingBackTransition = false
             DriverLog.detail("step=\(stepNumber) observed candidates=\(rows.count)")
 
             guard let decision = try await planDecision(
@@ -244,9 +246,19 @@ enum GoalRunner {
             }
 
             if let selected = chosen {
-                let settled = try await stableTarget(for: selected, timeout: .seconds(3), observe: {
-                    try await observeRows(session: session, udid: request.simulatorUDID)
-                })
+                let needsFullEditorCheck = action == .tap && selected.label == "Done" && eventCreationStarted
+                var pointMatched = false
+                if !needsFullEditorCheck {
+                    pointMatched = await freshPointMatchesTarget(selected, session: session)
+                }
+                let settled: (Row, [Row])?
+                if pointMatched {
+                    settled = (selected, rows)
+                } else {
+                    settled = try await stableTarget(for: selected, timeout: .seconds(3), observe: {
+                        try await observeRows(session: session, udid: request.simulatorUDID)
+                    })
+                }
                 guard let (target, fresh) = settled else {
                     let fresh = try await observeRows(session: session, udid: request.simulatorUDID)
                     rows = fresh
@@ -345,6 +357,7 @@ enum GoalRunner {
             if isAddAction { eventCreationStarted = true }
             if action == .type { exactTextEntered = true }
             pendingTransition = action == .openApp || action == .tap
+            pendingBackTransition = action == .tap && chosen?.stableID == "BackButton"
             if isSaveAction {
                 var verified = try await verify(request: request, rows: rows, client: client)
                 inputTokens += verified.inputTokens

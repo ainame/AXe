@@ -160,6 +160,20 @@ func targetStability() async throws {
     #expect(ambiguous?.0.id == nil)
 }
 
+@Test("Point validation accepts only the same visible target and frame")
+@MainActor
+func pointTargetValidation() {
+    let selected = Row(id: "0.1", role: "AXButton", label: "Add", value: nil,
+                       stableID: "add-plus-button", parent: "Calendar",
+                       frame: Rectangle(x: 300, y: 20, width: 50, height: 40), actions: ["tap"])
+    let matching = Data(#"{"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","enabled":true,"frame":{"x":300,"y":20,"width":50,"height":40}}"#.utf8)
+    let moved = Data(#"{"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","enabled":true,"frame":{"x":200,"y":20,"width":50,"height":40}}"#.utf8)
+    let disabled = Data(#"{"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","enabled":false,"frame":{"x":300,"y":20,"width":50,"height":40}}"#.utf8)
+    #expect(GoalRunner.pointMatchesTarget(matching, selected: selected))
+    #expect(!GoalRunner.pointMatchesTarget(moved, selected: selected))
+    #expect(!GoalRunner.pointMatchesTarget(disabled, selected: selected))
+}
+
 @Test("Planning waits for the same nonempty accessibility state twice")
 @MainActor
 func stablePlanningRows() async throws {

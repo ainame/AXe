@@ -66,6 +66,32 @@ extension GoalRunner {
         } while true
     }
 
+    static func pointMatchesTarget(_ data: Data, selected: Row) -> Bool {
+        guard let element = try? JSONDecoder().decode(Element.self, from: data),
+              element.enabled != false,
+              let frame = element.frame,
+              frame.width > 0, frame.height > 0,
+              (element.role ?? element.type) == selected.role,
+              element.AXLabel?.trimmingCharacters(in: .whitespacesAndNewlines) == selected.label,
+              element.AXValue?.trimmingCharacters(in: .whitespacesAndNewlines) == selected.value,
+              element.AXUniqueId == selected.stableID else { return false }
+        return abs(frame.centerX - selected.frame.centerX) < 1
+            && abs(frame.centerY - selected.frame.centerY) < 1
+            && abs(frame.width - selected.frame.width) < 1
+            && abs(frame.height - selected.frame.height) < 1
+    }
+
+    static func freshPointMatchesTarget(_ selected: Row, session: SimulatorSession) async -> Bool {
+        let point = CGPoint(x: selected.frame.centerX, y: selected.frame.centerY)
+        guard let data = try? await DriverLog.observe(session, at: point) else {
+            DriverLog.detail("Point validation failed for \(selected.label ?? selected.id); using full UI")
+            return false
+        }
+        let matched = pointMatchesTarget(data, selected: selected)
+        DriverLog.detail("Point validation \(matched ? "matched" : "missed") \(selected.label ?? selected.id)")
+        return matched
+    }
+
     static func shouldSettleNavigation(
         rows: [Row], requestedDate: RequestedDate?, dateSelected: Bool, afterLaunch: Bool
     ) -> Bool {

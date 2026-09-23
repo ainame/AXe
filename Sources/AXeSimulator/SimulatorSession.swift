@@ -63,6 +63,22 @@ public final class SimulatorSession {
         return try JSONSerialization.data(withJSONObject: response.elements)
     }
 
+    /// Reads the element currently hit at a coordinate for a cheap pre-input freshness check.
+    public func observe(at point: CGPoint) async throws -> Data {
+        let element = try await simulator.accessibilityElement(at: point)
+        defer { element.close() }
+        let keys: Set<FBAXKeys> = [
+            .label, .frame, .frameDict, .value, .uniqueID, .type, .enabled, .role,
+        ]
+        let response = try element.serialize(
+            with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys)
+        )
+        guard JSONSerialization.isValidJSONObject(response.elements) else {
+            throw SimulatorSessionError.invalidAccessibilityResponse
+        }
+        return try JSONSerialization.data(withJSONObject: response.elements)
+    }
+
     public func tap(x: Double, y: Double) async throws {
         let hid = try await simulator.connectToHID()
         try await hid.send(event: .tapAt(x: x, y: y), logger: logger)

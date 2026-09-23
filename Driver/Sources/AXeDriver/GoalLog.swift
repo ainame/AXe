@@ -29,6 +29,15 @@ enum DriverLog {
         return try await session.observe()
     }
 
+    static func observe(_ session: SimulatorSession, at point: CGPoint) async throws -> Data {
+        let start = ContinuousClock.now
+        defer {
+            screenReads += 1
+            screenMilliseconds += milliseconds(since: start)
+        }
+        return try await session.observe(at: point)
+    }
+
     static func write(_ message: String) {
         guard ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] != "0" else { return }
         let stamp = Date.now.formatted(.iso8601.year().month().day().dateSeparator(.dash)
