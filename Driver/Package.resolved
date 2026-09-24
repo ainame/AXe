@@ -1,5 +1,5 @@
 {
-  "originHash" : "4f8c15c5e98baf298b772d49f12bbedbfc028a1f487051627742902339d92be1",
+  "originHash" : "0cc3b73533955588253c4d45baebb1c0774bfb98cc0eaf837ba9e1a6aa932bc4",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -231,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ainame/swift-typesafe",
       "state" : {
-        "revision" : "37b79c28cc0c1736c76840bbcd1b3563413bcc7b",
-        "version" : "0.7.0"
+        "revision" : "40b6560d8d2dea2dc2c711cc5c8c2b0b87d54b9b",
+        "version" : "0.7.2"
       }
     }
   ],

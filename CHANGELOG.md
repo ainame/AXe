@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated `axe-driver` to swift-typesafe 0.7.2 so its default macOS transport builds without AsyncHTTPClient.
 - Changed command-line goal output to a concise human-readable result, with `--json` for full stdout JSON; stdin JSON requests remain machine-readable.
 - Reused post-action accessibility evidence and limited extra idle checks to launch transitions while retaining fresh target checks.
 - Removed Calendar-specific goal inference and action shortcuts so Jev chooses from the observed UI and caller-supplied goal data.

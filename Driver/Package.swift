@@ -18,7 +18,7 @@ let package = Package(
     dependencies: [
         .package(path: ".."),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
-        .package(url: "https://github.com/ainame/swift-typesafe", from: "0.7.0"),
+        .package(url: "https://github.com/ainame/swift-typesafe", from: "0.7.2"),
     ],
     targets: [
         .executableTarget(
