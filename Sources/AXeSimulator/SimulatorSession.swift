@@ -50,6 +50,7 @@ public final class SimulatorSession {
 
     public func observe() async throws -> Data {
         let started = ContinuousClock.now
+        let profiling = ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose"
         let element = try await simulator.accessibilityElementForFrontmostApplication()
         let fetched = ContinuousClock.now
         defer { element.close() }
@@ -57,14 +58,14 @@ public final class SimulatorSession {
             .label, .frame, .frameDict, .value, .uniqueID, .type, .enabled, .role,
         ]
         let response = try element.serialize(
-            with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys)
+            with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys, enableProfiling: profiling)
         )
         let serialized = ContinuousClock.now
         guard JSONSerialization.isValidJSONObject(response.elements) else {
             throw SimulatorSessionError.invalidAccessibilityResponse
         }
         let data = try JSONSerialization.data(withJSONObject: response.elements)
-        if ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose" {
+        if profiling {
             let finished = ContinuousClock.now
             func ms(_ duration: Duration) -> Int {
                 let value = duration.components
@@ -73,6 +74,11 @@ public final class SimulatorSession {
             FileHandle.standardError.write(Data(
                 "AXe full observe: fetch \(ms(started.duration(to: fetched))) ms, serialize \(ms(fetched.duration(to: serialized))) ms, JSON \(ms(serialized.duration(to: finished))) ms, \(data.count) bytes\n".utf8
             ))
+            if let profile = response.profilingData {
+                FileHandle.standardError.write(Data(
+                    "AXe full profile: elements \(profile.elementCount), attributes \(profile.attributeFetchCount), XPC calls \(profile.xpcCallCount), XPC \(Int(profile.totalXPCDuration * 1_000)) ms\n".utf8
+                ))
+            }
         }
         return data
     }
@@ -80,6 +86,7 @@ public final class SimulatorSession {
     /// Reads the element currently hit at a coordinate for a cheap pre-input freshness check.
     public func observe(at point: CGPoint) async throws -> Data {
         let started = ContinuousClock.now
+        let profiling = ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose"
         let element = try await simulator.accessibilityElement(at: point)
         let fetched = ContinuousClock.now
         defer { element.close() }
@@ -87,14 +94,14 @@ public final class SimulatorSession {
             .label, .frame, .frameDict, .value, .uniqueID, .type, .enabled, .role,
         ]
         let response = try element.serialize(
-            with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys)
+            with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys, enableProfiling: profiling)
         )
         let serialized = ContinuousClock.now
         guard JSONSerialization.isValidJSONObject(response.elements) else {
             throw SimulatorSessionError.invalidAccessibilityResponse
         }
         let data = try JSONSerialization.data(withJSONObject: response.elements)
-        if ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose" {
+        if profiling {
             let finished = ContinuousClock.now
             func ms(_ duration: Duration) -> Int {
                 let value = duration.components
@@ -103,6 +110,11 @@ public final class SimulatorSession {
             FileHandle.standardError.write(Data(
                 "AXe point observe: fetch \(ms(started.duration(to: fetched))) ms, serialize \(ms(fetched.duration(to: serialized))) ms, JSON \(ms(serialized.duration(to: finished))) ms, \(data.count) bytes\n".utf8
             ))
+            if let profile = response.profilingData {
+                FileHandle.standardError.write(Data(
+                    "AXe point profile: elements \(profile.elementCount), attributes \(profile.attributeFetchCount), XPC calls \(profile.xpcCallCount), XPC \(Int(profile.totalXPCDuration * 1_000)) ms\n".utf8
+                ))
+            }
         }
         return data
     }
