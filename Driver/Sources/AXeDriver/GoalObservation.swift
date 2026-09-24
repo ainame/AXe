@@ -49,6 +49,9 @@ extension GoalRunner {
         repeat {
             let rows = try await observe()
             let matching = rows.filter { $0.fingerprint == selected.fingerprint }
+            // A populated replacement screen cannot stabilize the old target.
+            // Replan from it without spending the full timeout on repeated tree reads.
+            if !rows.isEmpty && matching.isEmpty { return nil }
             let target = matching.count == 1 ? matching[0] : matching.first(where: { $0.id == selected.id })
             if let target, let previous,
                abs(target.frame.centerX - previous.frame.centerX) < 1,

@@ -186,6 +186,15 @@ func targetStability() async throws {
         [moving, moving]
     }
     #expect(ambiguous?.0.id == nil)
+    let replacement = Row(id: "replacement", role: "AXButton", label: "New screen", value: nil,
+                          stableID: nil, parent: nil, frame: initial.frame, actions: ["tap"])
+    var reads = 0
+    let disappeared = try await GoalRunner.stableTarget(for: initial, timeout: .seconds(3)) {
+        reads += 1
+        return [replacement]
+    }
+    #expect(disappeared == nil)
+    #expect(reads == 1)
 }
 
 @Test("Point validation accepts only the same visible target and frame")
