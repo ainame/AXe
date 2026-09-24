@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pinned an IDB fork revision that reuses a recent iOS 27 accessibility bootstrap, reducing repeated simulator read latency.
 - Updated `axe-driver` to swift-typesafe 0.7.2 so its default macOS transport builds without AsyncHTTPClient.
 - Changed command-line goal output to a concise human-readable result, with `--json` for full stdout JSON; stdin JSON requests remain machine-readable.
 - Reused post-action accessibility evidence and limited extra idle checks to launch transitions while retaining fresh target checks.
