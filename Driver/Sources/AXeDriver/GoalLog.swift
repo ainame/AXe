@@ -23,6 +23,7 @@ enum DriverLog {
     static func observe(_ session: SimulatorSession) async throws -> Data {
         let start = ContinuousClock.now
         defer {
+            detail("Accessibility full read: \(milliseconds(since: start)) ms")
             screenReads += 1
             screenMilliseconds += milliseconds(since: start)
         }
@@ -32,6 +33,7 @@ enum DriverLog {
     static func observe(_ session: SimulatorSession, at point: CGPoint) async throws -> Data {
         let start = ContinuousClock.now
         defer {
+            detail("Accessibility point read: \(milliseconds(since: start)) ms")
             screenReads += 1
             screenMilliseconds += milliseconds(since: start)
         }
