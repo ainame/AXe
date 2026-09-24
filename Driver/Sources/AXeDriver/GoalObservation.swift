@@ -3,11 +3,6 @@ import AXeSimulator
 
 @MainActor
 extension GoalRunner {
-    static func completionIsAvailable(rows: [Row]) -> Bool {
-        let labels = Set(rows.compactMap(\.label))
-        return !(labels.contains("Cancel") && labels.contains("Done"))
-    }
-
     static func acceptsTransition(from previous: [Row], to current: [Row]) -> Bool {
         !current.isEmpty && semanticSignature(current) != semanticSignature(previous)
     }
@@ -90,19 +85,6 @@ extension GoalRunner {
         let matched = pointMatchesTarget(data, selected: selected)
         DriverLog.detail("Point validation \(matched ? "matched" : "missed") \(selected.label ?? selected.id)")
         return matched
-    }
-
-    static func shouldSettleNavigation(
-        rows: [Row], requestedDate: RequestedDate?, dateSelected: Bool, afterLaunch: Bool
-    ) -> Bool {
-        if rows.isEmpty { return true }
-        guard let requestedDate, !dateSelected else { return afterLaunch }
-        let indexed = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ("e\($0.offset)", $0.element) })
-        let candidates = constrainedTapRows(indexed, requestedDate: requestedDate, dateSelected: false)
-        // A unique navigation target gets a fresh position check in stableTarget before input.
-        let hasUniqueTap = candidates.count == 1 && candidates.first?.value.actions.contains("tap") == true
-        let isBackTransition = candidates.count == 1 && candidates.first?.value.stableID == "BackButton"
-        return isBackTransition || (afterLaunch && !hasUniqueTap)
     }
 
     static func observeUntilChanged(

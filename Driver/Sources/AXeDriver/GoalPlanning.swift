@@ -9,8 +9,6 @@ struct GoalDecision {
     let targetProbability: Double?
     let targetConfidence: Double?
     let selectedTarget: Row?
-    let isForced: Bool
-    let isForcedNavigation: Bool
     let response: SystemOneResponse?
     let jevMilliseconds: Int
 }
@@ -21,38 +19,19 @@ extension GoalRunner {
         request: InteractionRequest,
         rows: [Row],
         steps: [GoalStep],
-        requestedDate: RequestedDate?,
-        requestedDateSelected: Bool,
-        eventCreationStarted: Bool,
-        exactTextEntered: Bool,
         stepNumber: Int,
         client: TypeSafeClient
     ) async throws -> GoalDecision? {
         let indexed = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ("e\($0.offset)", $0.element) })
-        var tapRows = constrainedTapRows(indexed, requestedDate: requestedDate, dateSelected: requestedDateSelected)
-        if requestedDateSelected, request.text != nil, !eventCreationStarted,
-           let add = indexed.first(where: { $0.value.stableID == "add-plus-button" }) {
-            tapRows = [add.key: add.value]
-        }
-
-        let forcedNavigation = requestedDate != nil && tapRows.count == 1
-            && (!requestedDateSelected || tapRows.first?.value.stableID == "add-plus-button")
-                ? tapRows.first : nil
-        let forcedSave = exactTextEntered && editorIsReadyToSave(
-            rows: rows, exactText: request.text, requestedDate: requestedDate
-        ) ? indexed.first(where: { $0.value.label == "Done" && $0.value.role == "AXButton" }) : nil
-        let forcedType = eventCreationStarted && editorIsReadyForTitle(
-            rows: rows, exactText: request.text
-        ) ? indexed.first(where: { $0.value.stableID == "title-field" && $0.value.actions.contains("type") }) : nil
-        let forcedTarget = forcedNavigation ?? forcedType ?? forcedSave
-
         var response: SystemOneResponse?
         var jevMilliseconds = 0
-        if forcedTarget == nil {
             var actionCriteria: [String: JSONValue] = [
                 GoalAction.noMatch.rawValue: "No offered action can safely advance the goal."
             ]
-            if completionIsAvailable(rows: rows) {
+            if (request.requirements?.isEmpty == false)
+                || (request.expectLabels?.isEmpty == false)
+                || (request.expectIDs?.isEmpty == false)
+                || (request.expectValues?.isEmpty == false) {
                 actionCriteria[GoalAction.goalComplete.rawValue] =
                     "Every requested result is visibly present on the current screen."
             }
@@ -81,7 +60,7 @@ extension GoalRunner {
                     criteria: actionCriteria
                 )
             ]
-            addTargetQuestion("tap_target", operation: "tap", rows: tapRows, questions: &questions)
+            addTargetQuestion("tap_target", operation: "tap", rows: indexed, questions: &questions)
             addTargetQuestion("type_target", operation: "type", rows: indexed, questions: &questions)
             addTargetQuestion("scroll_target", operation: "scroll", rows: indexed, questions: &questions)
             addRequirementQuestions(request.requirements ?? [], questions: &questions)
@@ -101,39 +80,32 @@ extension GoalRunner {
             )
             jevMilliseconds = DriverLog.milliseconds(since: jevStarted)
             DriverLog.jevMilliseconds += jevMilliseconds
-            guard let answer = response?.choices["action"],
-                  let modelAction = GoalAction(rawValue: answer.choice),
-                  actionCriteria[modelAction.rawValue] != nil else { return nil }
-        } else {
-            DriverLog.detail("step=\(stepNumber) using deterministic target without a Jev decision")
-        }
+        guard let answer = response?.choices["action"],
+              let action = GoalAction(rawValue: answer.choice),
+              actionCriteria[action.rawValue] != nil else { return nil }
 
-        let actionAnswer = response?.choices["action"]
-        let modelAction = actionAnswer.flatMap { GoalAction(rawValue: $0.choice) }
-        let action: GoalAction = forcedType != nil ? .type : (forcedTarget == nil ? modelAction! : .tap)
-        let actionProbability = forcedTarget == nil ? (actionAnswer?.probabilities[action.rawValue] ?? 0) : 1
-        let targetAnswer = forcedTarget == nil ? action.targetQuestion.flatMap { response?.choices[$0] } : nil
-        let targetID = forcedTarget?.key ?? targetAnswer?.choice
-        let targetProbability = forcedTarget == nil ? targetID.flatMap { targetAnswer?.probabilities[$0] } : 1
+        let actionAnswer = answer
+        let actionProbability = actionAnswer.probabilities[action.rawValue] ?? 0
+        let targetAnswer = action.targetQuestion.flatMap { response?.choices[$0] }
+        let targetID = targetAnswer?.choice
+        let targetProbability = targetID.flatMap { targetAnswer?.probabilities[$0] }
         let selectedTarget = targetID.flatMap { indexed[$0] }
         DriverLog.detail(
             "step=\(stepNumber) selected action=\(action.rawValue) "
                 + "action_probability=\(DriverLog.probability(actionProbability)) "
-                + "action_confidence=\(DriverLog.probability(forcedTarget == nil ? actionAnswer?.confidence : 1)) "
+                + "action_confidence=\(DriverLog.probability(actionAnswer.confidence)) "
                 + "target=\(selectedTarget?.label ?? targetID ?? "none") "
                 + "target_probability=\(DriverLog.probability(targetProbability)) "
-                + "target_confidence=\(DriverLog.probability(forcedTarget == nil ? targetAnswer?.confidence : 1))"
+                + "target_confidence=\(DriverLog.probability(targetAnswer?.confidence))"
         )
         return GoalDecision(
             action: action,
             actionProbability: actionProbability,
-            actionConfidence: forcedTarget == nil ? (actionAnswer?.confidence ?? 0) : 1,
+            actionConfidence: actionAnswer.confidence,
             targetID: targetID,
             targetProbability: targetProbability,
-            targetConfidence: forcedTarget == nil ? targetAnswer?.confidence : 1,
+            targetConfidence: targetAnswer?.confidence,
             selectedTarget: selectedTarget,
-            isForced: forcedTarget != nil,
-            isForcedNavigation: forcedNavigation != nil,
             response: response,
             jevMilliseconds: jevMilliseconds
         )

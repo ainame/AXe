@@ -28,12 +28,6 @@ enum GoalAction: String {
     }
 }
 
-struct RequestedDate: Equatable {
-    let month: String
-    let day: Int
-    let year: Int
-}
-
 struct GoalStep: Encodable {
     let action: String
     let target: String?

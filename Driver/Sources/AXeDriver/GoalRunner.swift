@@ -18,13 +18,7 @@ enum GoalRunner {
         var outputTokens = 0
         var completionRejections = 0
         var targetNoMatches = 0
-        let requestedDate = requestedDate(in: request.instruction)
-        var requestedDateSelected = false
-        var eventCreationStarted = false
-        var exactTextEntered = false
-        var navigationNoChangeRetries = 0
         var pendingTransition = false
-        var pendingBackTransition = false
         var nonActionRetries = 0
         var reusePostActionRows = false
         func finish(_ status: String, _ message: String, verification: GoalVerification? = nil) -> GoalResult {
@@ -113,12 +107,7 @@ enum GoalRunner {
                 }
                 rows = refreshed
             }
-            if pendingTransition && (pendingBackTransition || shouldSettleNavigation(
-                rows: rows,
-                requestedDate: requestedDate,
-                dateSelected: requestedDateSelected,
-                afterLaunch: steps.last?.action == GoalAction.openApp.rawValue
-            )) {
+            if pendingTransition && steps.last?.action == GoalAction.openApp.rawValue {
                 guard let settled = try await stableRows(startingWith: rows, timeout: .seconds(5), observe: {
                     try await observeRows(session: session, udid: request.simulatorUDID)
                 }) else {
@@ -126,13 +115,10 @@ enum GoalRunner {
                 }
                 rows = settled
             }
-            pendingBackTransition = false
             DriverLog.detail("step=\(stepNumber) observed candidates=\(rows.count)")
 
             guard let decision = try await planDecision(
-                request: request, rows: rows, steps: steps, requestedDate: requestedDate,
-                requestedDateSelected: requestedDateSelected, eventCreationStarted: eventCreationStarted,
-                exactTextEntered: exactTextEntered, stepNumber: stepNumber, client: client
+                request: request, rows: rows, steps: steps, stepNumber: stepNumber, client: client
             ) else {
                 return finish("invalid_model_answer", "Jev returned an unavailable action")
             }
@@ -209,10 +195,8 @@ enum GoalRunner {
                 record("no_match")
                 return finish("no_match", "Jev found no safe next action")
             }
-            guard decision.isForced || (
-                decision.actionConfidence >= confidenceThreshold
-                    && actionProbability >= probabilityThreshold
-            ) else {
+            guard decision.actionConfidence >= confidenceThreshold
+                    && actionProbability >= probabilityThreshold else {
                 record("uncertain")
                 return finish("uncertain", "Action confidence or selected probability is below its configured threshold")
             }
@@ -230,13 +214,11 @@ enum GoalRunner {
                     return finish("invalid_target", "Jev selected a target incompatible with \(action.rawValue)")
                 }
                 targetNoMatches = 0
-                guard decision.isForced || (
-                    decision.targetConfidence != nil
+                guard decision.targetConfidence != nil
                         && targetIsAccepted(
                             selectedProbability: targetProbability ?? 0,
                             minimumProbability: probabilityThreshold
-                        )
-                ) else {
+                        ) else {
                     record("uncertain", target: row)
                     return finish("uncertain", "Target confidence or selected probability is below its configured threshold")
                 }
@@ -246,11 +228,7 @@ enum GoalRunner {
             }
 
             if let selected = chosen {
-                let needsFullEditorCheck = action == .tap && selected.label == "Done" && eventCreationStarted
-                var pointMatched = false
-                if !needsFullEditorCheck {
-                    pointMatched = await freshPointMatchesTarget(selected, session: session)
-                }
+                let pointMatched = await freshPointMatchesTarget(selected, session: session)
                 let settled: (Row, [Row])?
                 if pointMatched {
                     settled = (selected, rows)
@@ -286,18 +264,6 @@ enum GoalRunner {
                 rows = fresh
                 chosen = target
             }
-            let isAddAction = action == .tap && chosen?.stableID == "add-plus-button"
-            let isSaveAction = action == .tap && chosen?.label == "Done" && eventCreationStarted
-            if isSaveAction, let requestedDate,
-               !Self.editorIsReadyToSave(rows: rows, exactText: request.text, requestedDate: requestedDate) {
-                let observedTitle = rows.first(where: { $0.stableID == "title-field" && $0.actions.contains("type") })?.value ?? "<missing>"
-                record("save_precondition_failed", target: chosen)
-                return finish(
-                    "save_precondition_failed",
-                    "Not saving: editor title is \"\(observedTitle)\" or the start date differs from the requested value"
-                )
-            }
-
             let inputStarted = elapsed()
             if action.rowAction != nil && chosen == nil {
                 return finish("invalid_target", "\(action.rawValue) requires a target")
@@ -329,53 +295,11 @@ enum GoalRunner {
             }
             reusePostActionRows = true
             let changed = semanticSignature(rows) != semanticSignature(beforeAction)
-            if !changed, action == .tap, let chosen, let requestedDate,
-               row(chosen, matches: requestedDate),
-               try await currentDateIsSelected(session: session, udid: request.simulatorUDID, requestedDate: requestedDate) {
-                requestedDateSelected = true
-                navigationNoChangeRetries = 0
-                record("already_selected", target: chosen)
-                DriverLog.write("Requested date is already selected; continuing to creation")
-                continue
-            }
             record(changed ? "executed" : "unchanged", target: chosen)
             if !changed {
-                if decision.isForcedNavigation, chosen?.stableID != "add-plus-button",
-                   navigationNoChangeRetries < 1 {
-                    navigationNoChangeRetries += 1
-                    DriverLog.write("Retrying unchanged date navigation once")
-                    continue
-                }
                 return finish("unchanged", "UI did not visibly change; stopped to avoid repeating input")
             }
-            navigationNoChangeRetries = 0
-            if action == .tap, let chosen, let requestedDate,
-               row(chosen, matches: requestedDate) {
-                requestedDateSelected = true
-                DriverLog.detail("step=\(stepNumber) requested date is selected")
-            }
-            if isAddAction { eventCreationStarted = true }
-            if action == .type { exactTextEntered = true }
             pendingTransition = action == .openApp || action == .tap
-            pendingBackTransition = action == .tap && chosen?.stableID == "BackButton"
-            if isSaveAction {
-                var verified = try await verify(request: request, rows: rows, client: client)
-                inputTokens += verified.inputTokens
-                outputTokens += verified.outputTokens
-                if !verified.result.passed {
-                    rows = try await observeRows(session: session, udid: request.simulatorUDID, includeOffscreen: true)
-                    verified = try await verify(request: request, rows: rows, client: client)
-                    inputTokens += verified.inputTokens
-                    outputTokens += verified.outputTokens
-                }
-                return finish(
-                    verified.result.passed ? "completed" : "done_unverified",
-                    verified.result.passed
-                        ? "Fresh accessibility evidence satisfied every configured requirement and expectation"
-                        : "The save control was executed, but fresh accessibility verification failed",
-                    verification: verified.result
-                )
-            }
         }
         return finish("step_limit", "Reached maxSteps before verified completion")
     }

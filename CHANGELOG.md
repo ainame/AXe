@@ -14,30 +14,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `make setup-axe-driver` to build AXe's simulator dependencies and the standalone driver.
 - Added timestamped stderr progress logging with action, Jev, accessibility-read, and step timing.
 - Added command-line options to `axe-driver` for running goals without manually constructing stdin JSON.
-- Added a positional `axe-driver` goal with automatic exact-title and date-specific completion inference for quoted Calendar event requests, plus optional `--trace` JSON output.
+- Added a positional `axe-driver` goal with explicit app, exact-text, and completion options, plus optional `--trace` JSON output.
 
 ### Changed
 
 - Changed command-line goal output to a concise human-readable result, with `--json` for full stdout JSON; stdin JSON requests remain machine-readable.
-- Reused post-action accessibility evidence and limited extra idle checks to launch and ambiguous navigation transitions while retaining fresh target checks.
+- Reused post-action accessibility evidence and limited extra idle checks to launch transitions while retaining fresh target checks.
+- Removed Calendar-specific goal inference and action shortcuts so Jev chooses from the observed UI and caller-supplied goal data.
 - Limited simulator accessibility serialization to the fields the driver reads, including the frame dictionary required for actionable controls.
 
 ### Fixed
 
 - Fixed goal runs treating transient empty accessibility snapshots during app launch as stable UI and stopping with `no_match`.
 - Fixed valid targets being rejected solely because Choice confidence was diffuse even when the selected target probability passed the safety threshold.
-- Fixed dated Calendar goals offering creation controls before the requested month and day navigation prerequisites were completed.
-- Fixed saved offscreen Calendar events being omitted from fresh completion verification and causing repeated creation attempts.
+- Fixed saved offscreen results being omitted from fresh completion verification.
 - Fixed goal runs treating a transient empty app-launch UI as `no_match`, and retrying launch-like transitions without repeating input.
 - Fixed animated accessibility targets causing immediate `stale` failures by waiting for a unique, settled target before execution.
-- Fixed date navigation reading incomplete intermediate accessibility states during Calendar transitions.
 - Fixed transient accessibility channel disconnects after app launch by retrying read-only observation on a fresh simulator connection.
-- Fixed Calendar goals stopping when tapping the already-selected requested date caused no visible UI change.
-- Fixed event creation stopping on a low-probability save target when the editor independently shows the exact title, requested start date, and one Done control.
-- Fixed explicit Calendar launch goals wandering through another foreground app by launching the named app directly.
+- Fixed explicit app launch goals wandering through another foreground app by launching the caller-supplied bundle ID directly.
 - Fixed persistent in-process accessibility disconnections by allowing one read-only recovery observation through `AXE_BIN_PATH`, this checkout's AXe binary, or an installed `axe` executable.
-- Fixed event editor typing stopping on diffuse Jev action confidence when one empty title field and the caller's exact text are available.
-- Fixed saving a dated Calendar event after iOS changed the caller's exact title or the editor start date no longer matched the request.
 
 ## [v1.8.0] - 2026-07-20
 

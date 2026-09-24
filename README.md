@@ -68,6 +68,8 @@ make setup-axe-driver
 # Run a bounded goal. The caller supplies exact text and independent evidence.
 printf '%s\n' '{
   "simulatorUDID": "<UDID>",
+  "appBundleID": "com.apple.mobilecal",
+  "appName": "Calendar",
   "instruction": "Create and save an event titled Cameron Birthday",
   "text": "Cameron Birthday",
   "maxSteps": 8,
@@ -77,18 +79,21 @@ printf '%s\n' '{
   "expectLabels": ["Cameron Birthday"]
 }' | Driver/.build/release/axe-driver
 
-# Or pass one quoted goal. The title and date are inferred for this Calendar case.
+# Or pass a goal with explicit app, text, and completion evidence.
 Driver/.build/release/axe-driver \
   "Open Calendar, go to Aug 16 2026, create a new event titled 'Cameron Birthday' and save" \
   --udid "<UDID>" \
+  --app-bundle-id com.apple.mobilecal --app-name Calendar \
+  --text 'Cameron Birthday' \
+  --requirement 'A saved event titled Cameron Birthday is visible on August 16 2026' \
   --trace /tmp/axe-agent-trace.json
 ```
 
-CLI goals default to eight steps. `--goal` remains available; `--text` and `--requirement` override inference for ambiguous goals. An explicit “Open Calendar app” goal launches Calendar directly. CLI output is a short human-readable result; `--trace` writes the full JSON result to a file, and `--json` prints it to standard output. JSON stdin requests keep their machine-readable output.
+CLI goals default to eight steps. `--goal` remains available. Supply `--app-bundle-id` to launch an app, `--text` for exact input, and `--requirement` or `--expect-label`/`--expect-id`/`--expect-value` for completion evidence. The goal sentence alone does not authorize typing or app launch. CLI output is a short human-readable result; `--trace` writes the full JSON result to a file, and `--json` prints it to standard output. JSON stdin requests keep their machine-readable output.
 
 The driver sends compact accessibility labels and values to TypeSafe's API. Use fixture or test-account data. It asks Jev to select one offered operation and one compatible visible target per step; AXe owns coordinates, freshness checks, HID input, budgets, and final verification. `completed` is returned only after a fresh UI observation satisfies every configured requirement and deterministic expectation. `done_unverified`, `uncertain`, `stale`, and `uncertain_write` return control without retrying a mutation.
 
-Goal runs write timestamped progress to standard error, including each action, selected probability, Jev time, accessibility-read count and time, and step duration. Stable post-action rows are reused, and extra idle checks are reserved for launch and ambiguous date-navigation transitions; target position is still rechecked on fresh UI before input. Set `AXE_DRIVER_LOG=verbose` for decision details or `AXE_DRIVER_LOG=0` to suppress progress logging. If in-process accessibility reconnection fails, the driver can use `AXE_BIN_PATH`, this checkout's debug `axe`, or an installed `axe` for one read-only recovery observation. It never repeats the preceding input during recovery.
+Goal runs write timestamped progress to standard error, including each action, selected probability, Jev time, accessibility-read count and time, and step duration. Post-action rows are reused, launch UI is allowed to settle, and target position is rechecked on fresh UI before input. Set `AXE_DRIVER_LOG=verbose` for decision details or `AXE_DRIVER_LOG=0` to suppress progress logging. If in-process accessibility reconnection fails, the driver can use `AXE_BIN_PATH`, this checkout's debug `axe`, or an installed `axe` for one read-only recovery observation. It never repeats the preceding input during recovery.
 
 Set `observeOnly: true` to inspect actionable rows without calling Jev. `minimumConfidence` defaults to `0.5` for action selection. Visible target selection requires at least `0.5` selected probability; `minimumProbability` can raise the probability gate for both. Every selected target is then revalidated against a fresh accessibility snapshot before input. Pin `model` for repeatable benchmarks or omit it to use `jev-latest`.
 

@@ -100,21 +100,6 @@ func verificationSemantics() {
     #expect(!failed.passed)
 }
 
-@Test("An unsaved editor cannot be mistaken for goal completion")
-@MainActor
-func unsavedEditorBlocksCompletion() throws {
-    let data = Data(#"""
-    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
-      {"role":"AXStaticText","AXLabel":"New Event","frame":{"x":10,"y":20,"width":90,"height":40}},
-      {"role":"AXButton","AXLabel":"Cancel","frame":{"x":10,"y":70,"width":90,"height":40}},
-      {"role":"AXButton","AXLabel":"Done","frame":{"x":300,"y":70,"width":90,"height":40}}
-    ]}
-    """#.utf8)
-    let rows = try Observation.rows(from: data)
-    #expect(!GoalRunner.completionIsAvailable(rows: rows))
-    #expect(GoalAction.goalComplete.rawValue == "goal_complete")
-}
-
 @Test("A transient empty observation is not accepted as a UI transition")
 @MainActor
 func emptyTransitionIsRejected() throws {
@@ -197,91 +182,17 @@ func targetSelectionThreshold() {
     #expect(!GoalRunner.targetIsAccepted(selectedProbability: 0.79, minimumProbability: 0.8))
 }
 
-@Test("Calendar date goals constrain taps to navigation prerequisites")
+@Test("Generic planning offers every compatible target without app-specific filtering")
 @MainActor
-func dateNavigationCandidates() throws {
-    let requested = GoalRunner.requestedDate(
-        in: "Open Calendar, go to August 20 2026, create an event"
-    )
-    #expect(requested == RequestedDate(month: "August", day: 20, year: 2026))
-
-    let september = try Observation.rows(from: Data(#"""
+func genericTargetsRemainAvailable() throws {
+    let data = Data(#"""
     {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
-      {"role":"AXButton","AXLabel":"2026","AXUniqueId":"BackButton","frame":{"x":10,"y":20,"width":90,"height":40}},
-      {"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","frame":{"x":300,"y":20,"width":90,"height":40}},
-      {"role":"AXButton","AXLabel":"Monday 31 August","frame":{"x":10,"y":70,"width":90,"height":40}}
+      {"role":"AXButton","AXLabel":"Previous","frame":{"x":10,"y":20,"width":90,"height":40}},
+      {"role":"AXButton","AXLabel":"Create","frame":{"x":300,"y":20,"width":90,"height":40}},
+      {"role":"AXTextField","AXLabel":"Name","AXValue":"","frame":{"x":10,"y":70,"width":180,"height":40}}
     ]}
-    """#.utf8))
-    let indexed = Dictionary(uniqueKeysWithValues: september.enumerated().map { ("e\($0.offset)", $0.element) })
-    let navigation = GoalRunner.constrainedTapRows(indexed, requestedDate: requested, dateSelected: false)
-    #expect(navigation.values.map(\.stableID) == ["BackButton"])
-    #expect(GoalRunner.shouldSettleNavigation(rows: september, requestedDate: requested, dateSelected: false, afterLaunch: false))
-    #expect(GoalRunner.shouldSettleNavigation(rows: september, requestedDate: requested, dateSelected: false, afterLaunch: true))
-
-    let august = try Observation.rows(from: Data(#"""
-    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
-      {"role":"AXButton","AXLabel":"Thursday 20 August","frame":{"x":10,"y":70,"width":120,"height":40}},
-      {"role":"AXButton","AXLabel":"Add","AXUniqueId":"add-plus-button","frame":{"x":300,"y":20,"width":90,"height":40}}
-    ]}
-    """#.utf8))
-    let augustIndexed = Dictionary(uniqueKeysWithValues: august.enumerated().map { ("e\($0.offset)", $0.element) })
-    let date = GoalRunner.constrainedTapRows(augustIndexed, requestedDate: requested, dateSelected: false)
-    #expect(date.values.map(\.label) == ["Thursday 20 August"])
-    #expect(!GoalRunner.shouldSettleNavigation(rows: august, requestedDate: requested, dateSelected: false, afterLaunch: false))
-    #expect(GoalRunner.shouldSettleNavigation(rows: [], requestedDate: requested, dateSelected: false, afterLaunch: true))
-    #expect(GoalRunner.shouldSettleNavigation(rows: august, requestedDate: nil, dateSelected: false, afterLaunch: true))
-}
-
-@Test("Quoted event goal derives exact text and date-specific verification")
-@MainActor
-func positionalCalendarGoal() {
-    let goal = "Open Calendar app, go to Aug 16 2026, create a new event titled 'Cameron Birthday' and save."
-    let inferred = GoalArguments.infer(from: goal)
-    #expect(inferred.text == "Cameron Birthday")
-    #expect(inferred.requirements == ["A saved event titled Cameron Birthday is visible on August 16 2026"])
-    #expect(inferred.appBundleID == "com.apple.mobilecal")
-    #expect(inferred.appName == "Calendar")
-    #expect(GoalRunner.requestedDate(in: goal) == RequestedDate(month: "August", day: 16, year: 2026))
-}
-
-@Test("A current-day heading confirms an unchanged Calendar date tap")
-@MainActor
-func currentDayConfirmsSelection() {
-    let data = Data(#"{"role":"AXApplication","AXLabel":"Calendar","children":[{"role":"AXHeading","AXUniqueId":"current-day","AXLabel":"Sunday – 16 Aug 2026"}]}"#.utf8)
-    let august16 = RequestedDate(month: "August", day: 16, year: 2026)
-    let august17 = RequestedDate(month: "August", day: 17, year: 2026)
-    #expect(GoalRunner.currentDateMatches(data, requestedDate: august16))
-    #expect(!GoalRunner.currentDateMatches(data, requestedDate: august17))
-}
-
-@Test("Save shortcut requires one Done button, exact title, and requested start date")
-@MainActor
-func saveRequiresEditorEvidence() {
-    let date = RequestedDate(month: "August", day: 16, year: 2026)
-    let frame = Rectangle(x: 0, y: 0, width: 10, height: 10)
-    let done = Row(id: "done", role: "AXButton", label: "Done", value: nil,
-                   stableID: nil, parent: nil, frame: frame, actions: ["tap"])
-    let title = Row(id: "title", role: "AXTextArea", label: "Title", value: "Cameron Birthday",
-                    stableID: "title-field", parent: nil, frame: frame, actions: ["tap", "type"])
-    let start = Row(id: "start", role: "AXButton", label: "16 Aug 2026", value: nil,
-                    stableID: "start-date-picker-cell", parent: nil, frame: frame, actions: ["tap"])
-    #expect(GoalRunner.editorIsReadyToSave(rows: [done, title, start], exactText: "Cameron Birthday", requestedDate: date))
-    #expect(!GoalRunner.editorIsReadyToSave(rows: [done, title, start], exactText: "Different title", requestedDate: date))
-    #expect(!GoalRunner.editorIsReadyToSave(rows: [done, title], exactText: "Cameron Birthday", requestedDate: date))
-    #expect(!GoalRunner.editorIsReadyToSave(rows: [done, done, title, start], exactText: "Cameron Birthday", requestedDate: date))
-}
-
-@Test("Exact title can be typed only into one empty event editor field")
-@MainActor
-func typeRequiresEditorEvidence() {
-    let frame = Rectangle(x: 0, y: 0, width: 10, height: 10)
-    let cancel = Row(id: "cancel", role: "AXButton", label: "Cancel", value: nil,
-                     stableID: nil, parent: nil, frame: frame, actions: ["tap"])
-    let done = Row(id: "done", role: "AXButton", label: "Done", value: nil,
-                   stableID: nil, parent: nil, frame: frame, actions: ["tap"])
-    let title = Row(id: "title", role: "AXTextArea", label: "Title", value: "Title",
-                    stableID: "title-field", parent: nil, frame: frame, actions: ["tap", "type"])
-    #expect(GoalRunner.editorIsReadyForTitle(rows: [cancel, done, title], exactText: "Cameron Birthday"))
-    #expect(!GoalRunner.editorIsReadyForTitle(rows: [cancel, done, title, title], exactText: "Cameron Birthday"))
-    #expect(!GoalRunner.editorIsReadyForTitle(rows: [done, title], exactText: "Cameron Birthday"))
+    """#.utf8)
+    let rows = try Observation.rows(from: data)
+    #expect(rows.filter { $0.actions.contains("tap") }.count == 3)
+    #expect(rows.filter { $0.actions.contains("type") }.map(\.label) == ["Name"])
 }

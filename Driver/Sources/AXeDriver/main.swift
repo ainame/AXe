@@ -73,18 +73,17 @@ struct DriverMain: AsyncParsableCommand {
                 guard let simulatorUDID, let instruction = positionalGoal ?? goal else {
                     throw ValidationError("--udid and a positional goal (or --goal) are required")
                 }
-                let inferred = await GoalArguments.infer(from: instruction)
                 request = InteractionRequest(
                     simulatorUDID: simulatorUDID,
                     instruction: instruction,
-                    text: text ?? inferred.text,
+                    text: text,
                     observeOnly: observeOnly,
                     minimumProbability: minimumProbability,
                     minimumConfidence: minimumConfidence,
                     maxSteps: maxSteps ?? (observeOnly ? nil : 8),
-                    appBundleID: appBundleID ?? inferred.appBundleID,
-                    appName: appName ?? inferred.appName,
-                    requirements: requirement.isEmpty ? inferred.requirements : requirement,
+                    appBundleID: appBundleID,
+                    appName: appName,
+                    requirements: requirement,
                     expectLabels: expectLabels.isEmpty ? nil : expectLabels,
                     expectIDs: expectIDs.isEmpty ? nil : expectIDs,
                     expectValues: expectValues.isEmpty ? nil : expectValues,
@@ -129,24 +128,5 @@ struct DriverMain: AsyncParsableCommand {
             if usesArguments, error is ValidationError { throw error }
             Foundation.exit(1)
         }
-    }
-}
-
-@MainActor
-enum GoalArguments {
-    static func infer(from instruction: String) -> (text: String?, requirements: [String]?, appBundleID: String?, appName: String?) {
-        let opensCalendar = instruction.range(of: #"(?i)\bopen\s+(?:the\s+)?calendar(?:\s+app)?\b"#, options: .regularExpression) != nil
-        let bundleID = opensCalendar ? "com.apple.mobilecal" : nil
-        let appName = opensCalendar ? "Calendar" : nil
-        let pattern = #"(?i)\btitled\s+['\"]([^'\"]+)['\"]"#
-        guard let expression = try? NSRegularExpression(pattern: pattern),
-              let match = expression.firstMatch(in: instruction, range: NSRange(instruction.startIndex..., in: instruction)),
-              let range = Range(match.range(at: 1), in: instruction) else {
-            return (nil, nil, bundleID, appName)
-        }
-        let title = String(instruction[range])
-        guard !title.isEmpty else { return (nil, nil, bundleID, appName) }
-        guard let date = GoalRunner.requestedDate(in: instruction) else { return (title, nil, bundleID, appName) }
-        return (title, ["A saved event titled \(title) is visible on \(date.month) \(date.day) \(date.year)"], bundleID, appName)
     }
 }
