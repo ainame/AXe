@@ -33,6 +33,9 @@ struct DriverMain: AsyncParsableCommand {
     @Option(name: .customLong("expect-label"), help: "Exact label expected after completion. Repeatable.")
     var expectLabels: [String] = []
 
+    @Option(name: .customLong("expect-label-prefix"), help: "Case-sensitive label prefix expected after completion. Repeatable.")
+    var expectLabelPrefixes: [String] = []
+
     @Option(name: .customLong("expect-id"), help: "Exact accessibility ID expected after completion. Repeatable.")
     var expectIDs: [String] = []
 
@@ -85,6 +88,7 @@ struct DriverMain: AsyncParsableCommand {
                     appName: appName,
                     requirements: requirement,
                     expectLabels: expectLabels.isEmpty ? nil : expectLabels,
+                    expectLabelPrefixes: expectLabelPrefixes.isEmpty ? nil : expectLabelPrefixes,
                     expectIDs: expectIDs.isEmpty ? nil : expectIDs,
                     expectValues: expectValues.isEmpty ? nil : expectValues,
                     model: model

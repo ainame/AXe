@@ -76,7 +76,7 @@ printf '%s\n' '{
   "requirements": [
     "An event titled Cameron Birthday is visibly present"
   ],
-  "expectLabels": ["Cameron Birthday"]
+  "expectLabelPrefixes": ["Cameron Birthday"]
 }' | Driver/.build/release/axe-driver
 
 # Or pass a goal with explicit app, text, and completion evidence.
@@ -86,10 +86,11 @@ Driver/.build/release/axe-driver \
   --app-bundle-id com.apple.mobilecal --app-name Calendar \
   --text 'Cameron Birthday' \
   --requirement 'A saved event titled Cameron Birthday is visible on August 16 2026' \
+  --expect-label-prefix 'Cameron Birthday' \
   --trace /tmp/axe-agent-trace.json
 ```
 
-CLI goals default to eight steps. `--goal` remains available. Supply `--app-bundle-id` to launch an app, `--text` for exact input, and `--requirement` or `--expect-label`/`--expect-id`/`--expect-value` for completion evidence. The goal sentence alone does not authorize typing or app launch. CLI output is a short human-readable result; `--trace` writes the full JSON result to a file, and `--json` prints it to standard output. JSON stdin requests keep their machine-readable output.
+CLI goals default to eight steps. `--goal` remains available. Supply `--app-bundle-id` to launch an app, `--text` for exact input, and `--requirement` or `--expect-label`/`--expect-label-prefix`/`--expect-id`/`--expect-value` for completion evidence. Label-prefix checks are case-sensitive and useful when an app appends metadata to a title. The goal sentence alone does not authorize typing or app launch. CLI output is a short human-readable result; `--trace` writes the full JSON result to a file, and `--json` prints it to standard output. JSON stdin requests keep their machine-readable output.
 
 The driver sends compact accessibility labels and values to TypeSafe's API. Use fixture or test-account data. It asks Jev to select one offered operation and one compatible visible target per step; AXe owns coordinates, freshness checks, HID input, budgets, and final verification. `completed` is returned only after a fresh UI observation satisfies every configured requirement and deterministic expectation. `done_unverified`, `uncertain`, `stale`, and `uncertain_write` return control without retrying a mutation.
 

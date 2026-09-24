@@ -17,8 +17,8 @@ enum GoalRunner {
         var inputTokens = 0
         var outputTokens = 0
         var completionRejections = 0
-        var targetNoMatches = 0
         var pendingTransition = false
+        var previousActionableCount = 0
         var nonActionRetries = 0
         var reusePostActionRows = false
         func finish(_ status: String, _ message: String, verification: GoalVerification? = nil) -> GoalResult {
@@ -107,7 +107,12 @@ enum GoalRunner {
                 }
                 rows = refreshed
             }
-            if pendingTransition && steps.last?.action == GoalAction.openApp.rawValue {
+            let actionableCount = rows.filter { !$0.actions.isEmpty }.count
+            let afterLaunch = steps.last?.action == GoalAction.openApp.rawValue
+            let sparseTransition = previousActionableCount > 0
+                && actionableCount * 2 < previousActionableCount
+            if pendingTransition && (afterLaunch || sparseTransition) {
+                DriverLog.detail("Settling transition: \(previousActionableCount) → \(actionableCount) actionable rows")
                 guard let settled = try await stableRows(startingWith: rows, timeout: .seconds(5), observe: {
                     try await observeRows(session: session, udid: request.simulatorUDID)
                 }) else {
@@ -117,10 +122,16 @@ enum GoalRunner {
             }
             DriverLog.detail("step=\(stepNumber) observed candidates=\(rows.count)")
 
-            guard let decision = try await planDecision(
-                request: request, rows: rows, steps: steps, stepNumber: stepNumber, client: client
-            ) else {
-                return finish("invalid_model_answer", "Jev returned an unavailable action")
+            let decision: GoalDecision
+            do {
+                guard let planned = try await planDecision(
+                    request: request, rows: rows, steps: steps, stepNumber: stepNumber, client: client
+                ) else {
+                    return finish("invalid_model_answer", "Jev returned an unavailable action")
+                }
+                decision = planned
+            } catch GoalPlanningError.candidateOverflow(let count) {
+                return finish("candidate_overflow", "\(count) action and target choices exceed Jev's 255 option limit")
             }
             let indexed = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ("e\($0.offset)", $0.element) })
             let action = decision.action
@@ -203,17 +214,11 @@ enum GoalRunner {
 
             var chosen: Row?
             if let requiredAction = action.rowAction {
-                if targetID == "no_match", targetNoMatches < 1 {
-                    targetNoMatches += 1
-                    record("target_no_match")
-                    continue
-                }
-                guard let targetID, targetID != "no_match", let row = indexed[targetID],
+                guard let targetID, let row = indexed[targetID],
                       row.actions.contains(requiredAction) else {
                     record("invalid_target")
                     return finish("invalid_target", "Jev selected a target incompatible with \(action.rawValue)")
                 }
-                targetNoMatches = 0
                 guard decision.targetConfidence != nil
                         && targetIsAccepted(
                             selectedProbability: targetProbability ?? 0,
@@ -287,6 +292,7 @@ enum GoalRunner {
             DriverLog.inputMilliseconds += elapsed() - inputStarted
 
             let beforeAction = rows
+            previousActionableCount = beforeAction.filter { !$0.actions.isEmpty }.count
             do {
                 rows = try await observeUntilChanged(session: session, udid: request.simulatorUDID, from: beforeAction)
             } catch {

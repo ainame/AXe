@@ -14,6 +14,7 @@ struct InteractionRequest: Decodable {
     let appName: String?
     let requirements: [String]?
     let expectLabels: [String]?
+    let expectLabelPrefixes: [String]?
     let expectIDs: [String]?
     let expectValues: [String]?
     let model: String?

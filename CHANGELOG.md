@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added timestamped stderr progress logging with action, Jev, accessibility-read, and step timing.
 - Added command-line options to `axe-driver` for running goals without manually constructing stdin JSON.
 - Added a positional `axe-driver` goal with explicit app, exact-text, and completion options, plus optional `--trace` JSON output.
+- Added a case-sensitive `--expect-label-prefix` completion check for titles whose accessibility labels include extra metadata.
 
 ### Changed
 
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changed command-line goal output to a concise human-readable result, with `--json` for full stdout JSON; stdin JSON requests remain machine-readable.
 - Reused post-action accessibility evidence and limited extra idle checks to launch transitions while retaining fresh target checks.
 - Removed Calendar-specific goal inference and action shortcuts so Jev chooses from the observed UI and caller-supplied goal data.
+- Combined each visible action and target into one Jev choice, included heading context, and waited for sparse transition screens to settle before replanning.
 - Limited simulator accessibility serialization to the fields the driver reads, including the frame dictionary required for actionable controls.
 
 ### Fixed

@@ -63,14 +63,39 @@ func numericValues() throws {
     #expect(rows.first?.value == "1")
 }
 
+@Test("Visible headings inform planning but cannot become input targets")
+@MainActor
+func headingsAreContextOnly() throws {
+    let data = Data(#"""
+    {"role":"AXApplication","frame":{"x":0,"y":0,"width":400,"height":800},"children":[
+      {"role":"AXHeading","AXLabel":"Current location: North","frame":{"x":10,"y":20,"width":200,"height":40}},
+      {"role":"AXButton","AXLabel":"South","frame":{"x":10,"y":70,"width":90,"height":40}}
+    ]}
+    """#.utf8)
+    let rows = try Observation.rows(from: data)
+    #expect(rows.map(\.label) == ["South", "Current location: North"])
+    #expect(rows.last?.actions.isEmpty == true)
+    let request = InteractionRequest(
+        simulatorUDID: "fixture", instruction: "Navigate south", text: nil,
+        observeOnly: nil, minimumProbability: nil, minimumConfidence: nil, maxSteps: 1,
+        appBundleID: nil, appName: nil, requirements: nil,
+        expectLabels: nil, expectLabelPrefixes: nil, expectIDs: nil, expectValues: nil, model: nil
+    )
+    let choices = GoalRunner.candidates(request: request, rows: rows, steps: [])
+    #expect(choices["tap:e0"]?.action == .tap)
+    #expect(choices["tap:e1"] == nil)
+}
+
 @Test("Verification requires configured evidence and every check to pass")
 func verificationSemantics() {
     let unconfigured = GoalVerification(
         requirements: [],
         expectedLabels: [],
+        expectedLabelPrefixes: [],
         expectedIDs: [],
         expectedValues: [],
         missingLabels: [],
+        missingLabelPrefixes: [],
         missingIDs: [],
         missingValues: []
     )
@@ -79,9 +104,11 @@ func verificationSemantics() {
     let verified = GoalVerification(
         requirements: [RequirementResult(requirement: "Saved event is visible", probability: 0.91)],
         expectedLabels: ["Cameron Birthday"],
+        expectedLabelPrefixes: ["Cameron Birthday"],
         expectedIDs: [],
         expectedValues: [],
         missingLabels: [],
+        missingLabelPrefixes: [],
         missingIDs: [],
         missingValues: []
     )
@@ -91,13 +118,29 @@ func verificationSemantics() {
     let failed = GoalVerification(
         requirements: [RequirementResult(requirement: "Saved event is visible", probability: 0.79)],
         expectedLabels: ["Cameron Birthday"],
+        expectedLabelPrefixes: ["Cameron Birthday"],
         expectedIDs: [],
         expectedValues: [],
         missingLabels: ["Cameron Birthday"],
+        missingLabelPrefixes: ["Cameron Birthday"],
         missingIDs: [],
         missingValues: []
     )
     #expect(!failed.passed)
+}
+
+@Test("Completion label prefixes preserve the caller's exact case")
+@MainActor
+func labelPrefixIsCaseSensitive() {
+    let row = Row(
+        id: "event", role: "AXButton",
+        label: "Axe Birthday, from 02:00 to 03:00", value: nil,
+        stableID: nil, parent: nil,
+        frame: Rectangle(x: 0, y: 0, width: 100, height: 40),
+        actions: ["tap"]
+    )
+    #expect(GoalRunner.missingLabelPrefixes(["AXe Birthday"], in: [row]) == ["AXe Birthday"])
+    #expect(GoalRunner.missingLabelPrefixes(["Axe Birthday"], in: [row]).isEmpty)
 }
 
 @Test("A transient empty observation is not accepted as a UI transition")
@@ -193,6 +236,16 @@ func genericTargetsRemainAvailable() throws {
     ]}
     """#.utf8)
     let rows = try Observation.rows(from: data)
-    #expect(rows.filter { $0.actions.contains("tap") }.count == 3)
-    #expect(rows.filter { $0.actions.contains("type") }.map(\.label) == ["Name"])
+    let request = InteractionRequest(
+        simulatorUDID: "fixture", instruction: "Create a named item", text: "Example",
+        observeOnly: nil, minimumProbability: nil, minimumConfidence: nil, maxSteps: 4,
+        appBundleID: nil, appName: nil, requirements: ["Saved item is visible"],
+        expectLabels: nil, expectLabelPrefixes: nil, expectIDs: nil, expectValues: nil, model: nil
+    )
+    let choices = GoalRunner.candidates(request: request, rows: rows, steps: [])
+    #expect(choices["tap:e0"]?.action == .tap)
+    #expect(choices["tap:e1"]?.action == .tap)
+    #expect(choices["type:e2"]?.action == .type)
+    #expect(choices["goal_complete"]?.action == .goalComplete)
+    #expect(choices["no_match"]?.action == .noMatch)
 }

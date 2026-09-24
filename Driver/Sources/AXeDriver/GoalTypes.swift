@@ -18,14 +18,6 @@ enum GoalAction: String {
         }
     }
 
-    var targetQuestion: String? {
-        switch self {
-        case .tap: "tap_target"
-        case .type: "type_target"
-        case .scrollUp, .scrollDown: "scroll_target"
-        case .openApp, .goalComplete, .noMatch: nil
-        }
-    }
 }
 
 struct GoalStep: Encodable {
@@ -49,19 +41,23 @@ struct RequirementResult: Encodable {
 struct GoalVerification: Encodable {
     let requirements: [RequirementResult]
     let expectedLabels: [String]
+    let expectedLabelPrefixes: [String]
     let expectedIDs: [String]
     let expectedValues: [String]
     let missingLabels: [String]
+    let missingLabelPrefixes: [String]
     let missingIDs: [String]
     let missingValues: [String]
 
     var isConfigured: Bool {
-        !requirements.isEmpty || !expectedLabels.isEmpty || !expectedIDs.isEmpty || !expectedValues.isEmpty
+        !requirements.isEmpty || !expectedLabels.isEmpty || !expectedLabelPrefixes.isEmpty
+            || !expectedIDs.isEmpty || !expectedValues.isEmpty
     }
 
     var passed: Bool {
         requirements.allSatisfy { $0.probability >= 0.8 }
-            && missingLabels.isEmpty && missingIDs.isEmpty && missingValues.isEmpty
+            && missingLabels.isEmpty && missingLabelPrefixes.isEmpty
+            && missingIDs.isEmpty && missingValues.isEmpty
     }
 }
 

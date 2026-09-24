@@ -3,6 +3,10 @@ import TypeSafe
 
 @MainActor
 extension GoalRunner {
+    static func missingLabelPrefixes(_ expected: [String], in rows: [Row]) -> [String] {
+        expected.filter { prefix in !rows.contains { $0.label?.hasPrefix(prefix) == true } }
+    }
+
     struct VerificationResponse {
         let result: GoalVerification
         let inputTokens: Int
@@ -15,9 +19,11 @@ extension GoalRunner {
         client: TypeSafeClient
     ) async throws -> VerificationResponse {
         let expectedLabels = request.expectLabels ?? []
+        let expectedLabelPrefixes = request.expectLabelPrefixes ?? []
         let expectedIDs = request.expectIDs ?? []
         let expectedValues = request.expectValues ?? []
         let missingLabels = expectedLabels.filter { expected in !rows.contains { $0.label == expected } }
+        let missingLabelPrefixes = Self.missingLabelPrefixes(expectedLabelPrefixes, in: rows)
         let missingIDs = expectedIDs.filter { expected in !rows.contains { $0.stableID == expected } }
         let missingValues = expectedValues.filter { expected in !rows.contains { $0.value == expected } }
         let requirements = request.requirements ?? []
@@ -26,9 +32,11 @@ extension GoalRunner {
                 result: GoalVerification(
                     requirements: [],
                     expectedLabels: expectedLabels,
+                    expectedLabelPrefixes: expectedLabelPrefixes,
                     expectedIDs: expectedIDs,
                     expectedValues: expectedValues,
                     missingLabels: missingLabels,
+                    missingLabelPrefixes: missingLabelPrefixes,
                     missingIDs: missingIDs,
                     missingValues: missingValues
                 ),
@@ -53,9 +61,11 @@ extension GoalRunner {
             result: GoalVerification(
                 requirements: results,
                 expectedLabels: expectedLabels,
+                expectedLabelPrefixes: expectedLabelPrefixes,
                 expectedIDs: expectedIDs,
                 expectedValues: expectedValues,
                 missingLabels: missingLabels,
+                missingLabelPrefixes: missingLabelPrefixes,
                 missingIDs: missingIDs,
                 missingValues: missingValues
             ),

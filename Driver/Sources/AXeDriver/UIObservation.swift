@@ -76,6 +76,7 @@ enum Observation {
         }
         guard let viewport = roots.compactMap(\.frame).first else { return [] }
         var rows: [Row] = []
+        var headings: [Row] = []
         func hasActionableDescendant(_ element: Element) -> Bool {
             let role = element.role ?? element.type ?? ""
             return ["Button", "Cell", "Switch", "CheckBox", "Link", "Tab", "TextField", "TextView", "TextArea", "Picker"]
@@ -110,6 +111,9 @@ enum Observation {
                 if !actions.isEmpty {
                     rows.append(Row(id: path, role: role, label: label, value: value,
                                     stableID: element.AXUniqueId, parent: parent, frame: frame, actions: actions))
+                } else if role.contains("Heading"), label?.isEmpty == false, headings.count < 12 {
+                    headings.append(Row(id: path, role: role, label: label, value: value,
+                                        stableID: element.AXUniqueId, parent: parent, frame: frame, actions: []))
                 }
             }
             let children = element.children ?? []
@@ -131,6 +135,7 @@ enum Observation {
             }
         }
         for (index, root) in roots.enumerated() { visit(root, path: "\(index)", parent: nil) }
-        return Array(rows.prefix(150))
+        guard !rows.isEmpty else { return [] }
+        return Array((rows + headings).prefix(150))
     }
 }
