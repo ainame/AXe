@@ -112,6 +112,18 @@ extension GoalRunner {
         guard let answer = response.choices["interaction"],
               let candidate = offered[answer.choice] else { return nil }
         let probability = answer.probabilities[answer.choice] ?? 0
+        let leadingChoices = answer.probabilities
+            .sorted { $0.value > $1.value }
+            .prefix(5)
+            .compactMap { key, probability -> String? in
+                guard let option = offered[key] else { return nil }
+                let label = option.rowID.flatMap { rowID -> String? in
+                    guard let index = Int(rowID.dropFirst()), rows.indices.contains(index) else { return nil }
+                    return rows[index].label ?? rows[index].stableID
+                } ?? option.action.rawValue
+                return "\(option.action.rawValue):\(label)=\(DriverLog.probability(probability))"
+            }
+        DriverLog.detail("step=\(stepNumber) leading choices \(leadingChoices.joined(separator: ", "))")
         let selectedTarget: Row? = candidate.rowID.flatMap { rowID in
             guard let index = Int(rowID.dropFirst()), rows.indices.contains(index) else { return nil }
             return rows[index]
