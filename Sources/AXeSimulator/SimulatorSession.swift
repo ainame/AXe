@@ -49,7 +49,9 @@ public final class SimulatorSession {
     }
 
     public func observe() async throws -> Data {
+        let started = ContinuousClock.now
         let element = try await simulator.accessibilityElementForFrontmostApplication()
+        let fetched = ContinuousClock.now
         defer { element.close() }
         let keys: Set<FBAXKeys> = [
             .label, .frame, .frameDict, .value, .uniqueID, .type, .enabled, .role,
@@ -57,15 +59,29 @@ public final class SimulatorSession {
         let response = try element.serialize(
             with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys)
         )
+        let serialized = ContinuousClock.now
         guard JSONSerialization.isValidJSONObject(response.elements) else {
             throw SimulatorSessionError.invalidAccessibilityResponse
         }
-        return try JSONSerialization.data(withJSONObject: response.elements)
+        let data = try JSONSerialization.data(withJSONObject: response.elements)
+        if ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose" {
+            let finished = ContinuousClock.now
+            func ms(_ duration: Duration) -> Int {
+                let value = duration.components
+                return Int(value.seconds) * 1_000 + Int(value.attoseconds / 1_000_000_000_000_000)
+            }
+            FileHandle.standardError.write(Data(
+                "AXe full observe: fetch \(ms(started.duration(to: fetched))) ms, serialize \(ms(fetched.duration(to: serialized))) ms, JSON \(ms(serialized.duration(to: finished))) ms, \(data.count) bytes\n".utf8
+            ))
+        }
+        return data
     }
 
     /// Reads the element currently hit at a coordinate for a cheap pre-input freshness check.
     public func observe(at point: CGPoint) async throws -> Data {
+        let started = ContinuousClock.now
         let element = try await simulator.accessibilityElement(at: point)
+        let fetched = ContinuousClock.now
         defer { element.close() }
         let keys: Set<FBAXKeys> = [
             .label, .frame, .frameDict, .value, .uniqueID, .type, .enabled, .role,
@@ -73,10 +89,22 @@ public final class SimulatorSession {
         let response = try element.serialize(
             with: FBAccessibilityRequestOptions(nestedFormat: true, keys: keys)
         )
+        let serialized = ContinuousClock.now
         guard JSONSerialization.isValidJSONObject(response.elements) else {
             throw SimulatorSessionError.invalidAccessibilityResponse
         }
-        return try JSONSerialization.data(withJSONObject: response.elements)
+        let data = try JSONSerialization.data(withJSONObject: response.elements)
+        if ProcessInfo.processInfo.environment["AXE_DRIVER_LOG"] == "verbose" {
+            let finished = ContinuousClock.now
+            func ms(_ duration: Duration) -> Int {
+                let value = duration.components
+                return Int(value.seconds) * 1_000 + Int(value.attoseconds / 1_000_000_000_000_000)
+            }
+            FileHandle.standardError.write(Data(
+                "AXe point observe: fetch \(ms(started.duration(to: fetched))) ms, serialize \(ms(fetched.duration(to: serialized))) ms, JSON \(ms(serialized.duration(to: finished))) ms, \(data.count) bytes\n".utf8
+            ))
+        }
+        return data
     }
 
     public func tap(x: Double, y: Double) async throws {
